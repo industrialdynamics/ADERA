@@ -1,0 +1,4 @@
+deployer/node_modules
+npm-debug.log
+deployer/Dockerfile
+.dockerignore

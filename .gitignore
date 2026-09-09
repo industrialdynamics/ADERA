@@ -1,0 +1,22 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Runtime state
+**/data/
+cdr-queue.json
+deployment.json
+
+# Besu local data (named volumes are used, but ignore any stray host dirs)
+besu-data/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# NOTE: .env is intentionally committed for this PoC because it contains only
+# well-known THROWAWAY test keys. In any real deployment, un-comment the line
+# below and source secrets from a manager / HSM instead.
+# .env

@@ -1,0 +1,43 @@
+{
+  "name": "ADERA Dev Sandbox",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-20-bookworm",
+
+  // Docker-in-Docker so the ENTIRE ADERA stack (Besu validators, deployer,
+  // gateways) runs inside this dev container — nothing is installed on, or run
+  // against, your host machine. Any cloud CLIs (aws / gcloud) you add later are
+  // likewise sandboxed here.
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true
+    },
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/dhoeric/features/google-cloud-cli:1": {}
+  },
+
+  // Host ports that map to the sandbox services (see docker-compose.yml).
+  "forwardPorts": [8545, 8547, 8546, 8548, 9101, 9102],
+  "portsAttributes": {
+    "8545": { "label": "CPO validator JSON-RPC" },
+    "8547": { "label": "eMSP validator JSON-RPC" },
+    "9101": { "label": "CPO gateway (OCPI)" },
+    "9102": { "label": "eMSP gateway (OCPI)" }
+  },
+
+  // Convenience only — installs the gateway/deployer node deps for editor
+  // IntelliSense. It does NOT start the stack; you start that explicitly with
+  // `docker compose up --build` from the integrated terminal.
+  "postCreateCommand": "echo 'ADERA devcontainer ready. Run: docker compose up --build'",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "NomicFoundation.hardhat-solidity",
+        "ms-azuretools.vscode-docker",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  },
+
+  "remoteUser": "node"
+}

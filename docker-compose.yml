@@ -1,0 +1,196 @@
+# =============================================================================
+# ADERA — Automated Decentralized Energy Roaming Architecture
+# Local multi-node PoC sandbox.
+#
+#   adera-validator-cpo    Founding CPO validator  (Hyperledger Besu, IBFT 2.0)
+#   adera-validator-emsp   Founding eMSP validator (Hyperledger Besu, IBFT 2.0)
+#   adera-contract-deployer Compiles + deploys AderaRegistry, seeds parties
+#   adera-gateway-cpo      CPO operator gateway (initiates the OCPI handshake)
+#   adera-gateway-emsp     eMSP operator gateway (receiver)
+#
+# Bring up:   docker compose up --build
+# Tear down:  docker compose down -v
+# =============================================================================
+
+networks:
+  adera-net:
+    name: adera-net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  besu-cpo-data:
+  besu-emsp-data:
+  adera-shared:
+  gw-cpo-data:
+  gw-emsp-data:
+
+services:
+  # ---------------------------------------------------------------------------
+  # Founding CPO validator. Static IP 172.28.0.11 MUST match its enode entry in
+  # network/static-nodes.json and network/permissions_config.toml.
+  # ---------------------------------------------------------------------------
+  adera-validator-cpo:
+    image: ${BESU_IMAGE:-hyperledger/besu:24.12.0}
+    container_name: adera-validator-cpo
+    hostname: adera-validator-cpo
+    user: "0:0"
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/config/entrypoint.sh"]
+    environment:
+      ADERA_ROLE: "cpo"
+      ADERA_P2P_HOST: "172.28.0.11"
+    volumes:
+      - ./network:/config
+      - besu-cpo-data:/opt/besu/data
+    ports:
+      - "8545:8545"   # JSON-RPC (host -> CPO validator)
+      - "8546:8546"   # WebSocket
+    networks:
+      adera-net:
+        ipv4_address: 172.28.0.11
+
+  # ---------------------------------------------------------------------------
+  # Founding eMSP validator. Static IP 172.28.0.12.
+  # ---------------------------------------------------------------------------
+  adera-validator-emsp:
+    image: ${BESU_IMAGE:-hyperledger/besu:24.12.0}
+    container_name: adera-validator-emsp
+    hostname: adera-validator-emsp
+    user: "0:0"
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/config/entrypoint.sh"]
+    environment:
+      ADERA_ROLE: "emsp"
+      ADERA_P2P_HOST: "172.28.0.12"
+    volumes:
+      - ./network:/config
+      - besu-emsp-data:/opt/besu/data
+    ports:
+      - "8547:8545"   # JSON-RPC (host -> eMSP validator)
+      - "8548:8546"   # WebSocket
+    networks:
+      adera-net:
+        ipv4_address: 172.28.0.12
+
+  # ---------------------------------------------------------------------------
+  # One-shot: compile + deploy the registry, seed founding parties, exercise the
+  # multisig admission + auditor flow, then write /shared/deployment.json.
+  # ---------------------------------------------------------------------------
+  adera-contract-deployer:
+    build:
+      context: ./contracts
+      dockerfile: deployer/Dockerfile
+    image: adera/contract-deployer:1.0.0
+    container_name: adera-contract-deployer
+    restart: "no"
+    depends_on:
+      adera-validator-cpo:
+        condition: service_started
+      adera-validator-emsp:
+        condition: service_started
+    environment:
+      RPC_URL: "http://adera-validator-cpo:8545"
+      CHAIN_ID: "${CHAIN_ID:-20231}"
+      THRESHOLD: "2"
+      SHARED_DIR: "/shared"
+      ADERA_CONSORTIUM_KEY: "${ADERA_CONSORTIUM_KEY}"
+      DEPLOYER_KEY: "${DEPLOYER_KEY}"
+      EMSP_SIGNER_KEY: "${EMSP_SIGNER_KEY}"
+      AUDITOR_KEY: "${AUDITOR_KEY}"
+      CPO_MESSAGING_KEY: "${CPO_MESSAGING_KEY}"
+      EMSP_MESSAGING_KEY: "${EMSP_MESSAGING_KEY}"
+      EVX_MESSAGING_KEY: "${EVX_MESSAGING_KEY}"
+      EVX_ENTITY: "${EVX_ENTITY}"
+      CPO_OCPI_URL: "http://adera-gateway-cpo:9101/party/LK/CPO/ocpi/versions"
+      EMSP_OCPI_URL: "http://adera-gateway-emsp:9102/party/LK/EMS/ocpi/versions"
+      EVX_OCPI_URL: "http://adera-gateway-evx:9103/party/LK/EVX/ocpi/versions"
+    volumes:
+      - adera-shared:/shared
+    networks:
+      - adera-net
+
+  # ---------------------------------------------------------------------------
+  # CPO operator gateway — INITIATES on-chain discovery + signed OCPI handshake.
+  # ---------------------------------------------------------------------------
+  adera-gateway-cpo:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    image: adera/operator-gateway:1.0.0
+    container_name: adera-gateway-cpo
+    hostname: adera-gateway-cpo
+    restart: unless-stopped
+    depends_on:
+      adera-contract-deployer:
+        condition: service_completed_successfully
+    environment:
+      RPC_URL: "http://adera-validator-cpo:8545"
+      OCPI_PORT: "9101"
+      PUBLIC_OCPI_BASE: "http://adera-gateway-cpo:9101"
+      ADERA_CONSORTIUM_KEY: "${ADERA_CONSORTIUM_KEY}"
+      REG_TOKEN: "${REG_TOKEN}"
+      PAYMENT_PLUGIN: "mandate"
+      SHARED_DIR: "/shared"
+      DATA_DIR: "/data"
+      # This process hosts ONE tenant identity today (LK/CPO). Adding a second
+      # fronted CPO behind this same gateway is TENANT_COUNT=2 plus a second
+      # TENANT_2_* block — no other code changes required (see docs/00 §1.8).
+      TENANT_COUNT: "1"
+      TENANT_1_ROLE: "CPO"
+      TENANT_1_PARTY_COUNTRY: "LK"
+      TENANT_1_PARTY_ID: "CPO"
+      TENANT_1_BUSINESS_NAME: "Example Charging Co. (Pvt) Ltd"
+      TENANT_1_MESSAGING_KEY: "${CPO_MESSAGING_KEY}"
+      TENANT_1_PEER_COUNTRY: "LK"
+      TENANT_1_PEER_ID: "EMS"
+      TENANT_1_INITIATE: "true"
+    volumes:
+      - adera-shared:/shared:ro
+      - gw-cpo-data:/data
+    ports:
+      - "9101:9101"
+    networks:
+      - adera-net
+
+  # ---------------------------------------------------------------------------
+  # eMSP operator gateway — passive RECEIVER of the OCPI credentials handshake.
+  # ---------------------------------------------------------------------------
+  adera-gateway-emsp:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    image: adera/operator-gateway:1.0.0
+    container_name: adera-gateway-emsp
+    hostname: adera-gateway-emsp
+    restart: unless-stopped
+    depends_on:
+      adera-contract-deployer:
+        condition: service_completed_successfully
+    environment:
+      RPC_URL: "http://adera-validator-emsp:8545"
+      OCPI_PORT: "9102"
+      PUBLIC_OCPI_BASE: "http://adera-gateway-emsp:9102"
+      ADERA_CONSORTIUM_KEY: "${ADERA_CONSORTIUM_KEY}"
+      REG_TOKEN: "${REG_TOKEN}"
+      PAYMENT_PLUGIN: "transfer"
+      SHARED_DIR: "/shared"
+      DATA_DIR: "/data"
+      # This process hosts ONE tenant identity today (LK/EMS), passive-receiver
+      # only. Adding a second fronted eMSP/CPO behind this gateway is
+      # TENANT_COUNT=2 plus a second TENANT_2_* block (see docs/00 §1.8).
+      TENANT_COUNT: "1"
+      TENANT_1_ROLE: "EMSP"
+      TENANT_1_PARTY_COUNTRY: "LK"
+      TENANT_1_PARTY_ID: "EMS"
+      TENANT_1_BUSINESS_NAME: "Example eMobility Services (Pvt) Ltd"
+      TENANT_1_MESSAGING_KEY: "${EMSP_MESSAGING_KEY}"
+    volumes:
+      - adera-shared:/shared:ro
+      - gw-emsp-data:/data
+    ports:
+      - "9102:9102"
+    networks:
+      - adera-net

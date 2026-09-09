@@ -1,0 +1,14 @@
+{
+  "name": "adera-operator-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ADERA operator gateway: on-chain peer discovery, signed OCPI 2.2.1 credentials handshake, pluggable payment settlement, and durable offline CDR queue.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node gateway.js"
+  },
+  "dependencies": {
+    "ethers": "6.13.4",
+    "express": "4.21.2"
+  }
+}

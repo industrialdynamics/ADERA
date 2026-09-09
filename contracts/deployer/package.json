@@ -1,0 +1,14 @@
+{
+  "name": "adera-contract-deployer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Compiles and deploys the ADERA registry, then seeds founding parties and demonstrates the multisig admission + PUCSL auditor flow.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node deploy.js"
+  },
+  "dependencies": {
+    "ethers": "6.13.4",
+    "solc": "0.8.24"
+  }
+}
