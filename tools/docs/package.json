@@ -1,0 +1,17 @@
+{
+  "name": "adera-docs",
+  "private": true,
+  "type": "module",
+  "description": "Builds the ADERA whitepaper into a GitHub Pages site and a print-ready PDF from one Markdown source.",
+  "scripts": {
+    "build": "node build.mjs",
+    "html": "node build.mjs --no-pdf",
+    "serve": "node build.mjs && node --run serve:only",
+    "serve:only": "npx --yes http-server ../../_site -p 8080 -c-1"
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0",
+    "markdown-it-anchor": "^9.2.0",
+    "puppeteer": "^23.11.1"
+  }
+}

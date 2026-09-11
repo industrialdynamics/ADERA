@@ -6,10 +6,9 @@
 
 ---
 
-**Published by:** Industrial Dynamics
-**Version:** 2.0
-**Status:** Open specification — free to adopt, implement, and mandate. No licence fee, no vendor dependency.
-**Companion documents:** `02-System-Architecture-Security-Design.md` (threat model and controls) · `00-ADERA-Plain-English-Guide.md` (extended commentary) · the reference implementation in this repository.
+- **Published by:** Industrial Dynamics
+- **Version:** 2.0
+- **Status:** Open specification — free to adopt, implement, and mandate. No licence fee, no vendor dependency.
 
 > **Who this is for.** Regulators and policymakers deciding how a national EV
 > charging market should interconnect; charge point operators and mobility
@@ -346,8 +345,13 @@ relevant layer, not one.
 | 7 | Transport encryption | Eavesdropping and interception |
 | 8 | Encrypted addresses | Leaking the network's topology |
 
-The full threat model and the specific mitigations at each layer are in
-`02-System-Architecture-Security-Design.md`.
+Each layer is specified and operated independently of the others, and each
+assumes the layers around it may have already failed. An attacker who obtains a
+valid network credential still cannot write to the registry; one who obtains a
+write credential still cannot claim an existing identity; one who compromises an
+operator's systems still cannot produce a valid signature without that
+operator's private key, which is why §10.1 requires those keys to be held in
+dedicated hardware.
 
 ## 5. Governance
 
@@ -695,8 +699,10 @@ A licence condition adopting ADERA would specify:
    key.
 5. **Settlement.** Rail-neutral. Operators must support at least one
    regulator-recognised local rail through the payment-plugin interface.
-6. **Security baseline.** The network permissioning, transport encryption and
-   key-binding requirements of `02-System-Architecture-Security-Design.md`.
+6. **Security baseline.** The eight controls of §4.3, specifically: network
+   and write permissioning of every node; mutual-TLS encrypted transport
+   between operators; the signed handshake of §4.2; and custody of every
+   operator's signing key in dedicated cryptographic hardware.
 7. **Metrology.** Charger measurement accuracy and verification requirements,
    addressing the gap in §9 — noting that this sits outside ADERA itself.
 
@@ -715,8 +721,9 @@ risk into a political one.
 
 ## 11. Status of the reference implementation
 
-This repository contains a working reference implementation. Stating precisely
-what it does and does not do is part of the specification's credibility.
+A working reference implementation of this specification exists and is
+published as free software. Stating precisely what it does and does not do is
+part of the specification's credibility.
 
 **Implemented and demonstrable end to end:**
 
@@ -763,7 +770,7 @@ production-ready as shipped.
 
 ---
 
-# Appendix A — Glossary
+# Glossary
 
 | Term | Meaning |
 | --- | --- |
@@ -783,29 +790,12 @@ production-ready as shipped.
 | **Smart contract** | A short published program every copy of the ledger runs identically, so no participant can apply different rules to itself. |
 | **Validator** | An organisation running a node that records changes. Holds ordering power only — no authority over identity or membership. |
 
-# Appendix B — Mapping to the reference implementation
-
-| Concept in this document | Where it lives in the code |
-| --- | --- |
-| The registry and its rules | `contracts/AderaRegistry.sol` |
-| Party ID → address mapping | `Party` struct, `resolveEndpoint()` |
-| Identity binding (§4.1) | `entityToParty`, `_registerParty()` |
-| Admission by vote (§5.1) | `propose()` / `confirm()`, `proposeAdmitParty()` |
-| Regulator auditor role (§5.2) | `auditor`, `auditProbe()`, `ComplianceProbe` event |
-| Encrypted addresses (§3.4) | `endpointCipher` + gateway decryption |
-| Handshake proof of control (§4.2) | `gateway/lib/crypto.js`, `ocpi.js`, `replayGuard.js` |
-| Permissioned network (§4.3, layers 1–3) | `network/genesis.json`, `permissions_config.toml` |
-| Payment plugin layer (§7.2) | `gateway/lib/payments.js` |
-| Offline CDR queue (§8) | `gateway/lib/offlineQueue.js` |
-| Governance lifecycle (§5.3) | `contracts/deployer/deploy.js` |
-
 ---
 
 *ADERA is published by **Industrial Dynamics** as an open specification. It may
-be adopted, implemented, and mandated without licence fee. The reference
-implementation is free software.*
+be adopted, implemented, and mandated without licence fee and without dependency
+on any vendor.*
 
-*For the full threat model and control specification, see
-`02-System-Architecture-Security-Design.md`. For extended commentary and worked
-examples, see `00-ADERA-Plain-English-Guide.md`. For running the reference
-implementation, see the repository `README.md`.*
+*The reference implementation described in §11 is free software, published at
+`github.com/industrialdynamics/ADERA` together with its full threat model and
+operator deployment guide.*

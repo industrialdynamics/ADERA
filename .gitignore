@@ -20,3 +20,6 @@ besu-data/
 # well-known THROWAWAY test keys. In any real deployment, un-comment the line
 # below and source secrets from a manager / HSM instead.
 # .env
+
+# Generated documentation site (built by .github/workflows/docs.yml)
+_site/

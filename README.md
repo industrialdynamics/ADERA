@@ -6,7 +6,45 @@ tokenless, hubless EV-roaming framework: a permissioned Hyperledger Besu (IBFT
 between operators and pluggable local payment settlement.
 
 > **Docs:** [`docs/01-ADERA-Whitepaper.md`](docs/01-ADERA-Whitepaper.md) ·
-> [`docs/02-System-Architecture-Security-Design.md`](docs/02-System-Architecture-Security-Design.md)
+> [`docs/02-System-Architecture-Security-Design.md`](docs/02-System-Architecture-Security-Design.md) ·
+> [`docs/00-ADERA-Expanded-Technical-Guide.md`](docs/00-ADERA-Expanded-Technical-Guide.md)
+
+---
+
+## Publishing the whitepaper
+
+The whitepaper is published as a web page and a print-ready PDF, both built
+from the single Markdown source in `docs/01-ADERA-Whitepaper.md` so they cannot
+drift apart.
+
+`.github/workflows/docs.yml` rebuilds and republishes both on every push to
+`main` that touches the whitepaper or its build tooling. **One-time setup:**
+in **Settings → Pages → Build and deployment**, set **Source** to
+**GitHub Actions**. The site then publishes to
+`https://industrialdynamics.github.io/ADERA/`, with the PDF alongside it at
+`/ADERA-Whitepaper.pdf`.
+
+To build locally:
+
+```bash
+cd tools/docs
+npm install
+npm run build          # -> _site/index.html and _site/ADERA-Whitepaper.pdf
+npm run html           # HTML only, skips Chromium
+npm run serve          # build, then serve _site on :8080
+```
+
+Puppeteer ships no Linux/arm64 Chromium, so on an Apple Silicon machine install
+the distro build and point at it:
+
+```bash
+sudo apt-get install -y chromium
+PUPPETEER_EXECUTABLE_PATH=$(which chromium) npm run build
+```
+
+Styling for both outputs lives in one file, `tools/docs/style.css`; its
+`@media print` block controls pagination, and each `# Part N` heading starts a
+new page in the PDF.
 
 ---
 
@@ -42,7 +80,7 @@ ADERA/
 │   ├── verify.sh                 # one-command live demo / smoke test
 │   └── attack-suite.js           # forged, replayed & mis-declared handshakes
 ├── docs/
-│   ├── 00-ADERA-Plain-English-Guide.md   # start here; §7 = implemented vs. described
+│   ├── 00-ADERA-Expanded-Technical-Guide.md   # start here; §7 = implemented vs. described
 │   ├── 01-ADERA-Whitepaper.md
 │   └── 02-System-Architecture-Security-Design.md
 ├── network/                      # Besu IBFT 2.0 network material (pre-generated, valid)
@@ -264,7 +302,7 @@ Each gateway process serves a *table* of Party identities rather than being
 hardwired to a single one — `/health` lists every identity a given process
 hosts. This PoC runs one tenant per process today; adding a second fronted
 identity behind the same gateway is a config change (`TENANT_COUNT=2` plus a
-`TENANT_2_*` block), not a code change — see `docs/00-ADERA-Plain-English-Guide.md`
+`TENANT_2_*` block), not a code change — see `docs/00-ADERA-Expanded-Technical-Guide.md`
 §1.8.
 
 ### 5. (Optional) Prove the identity-hijack defense
