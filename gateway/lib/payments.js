@@ -11,12 +11,22 @@
  *
  * Interface (PaymentPlugin):
  *   get name(): string
- *   openSettlementChannel({ localParty, remoteParty, remoteRole, remotePubKey })
+ *   openSettlementChannel({ localParty, remoteParty, remoteRole })
  *       -> { channelId, rail, mandateRef }
  *   settleCdr({ channelId, cdr }) -> { settlementRef, rail, amount, status }
  *
  * Concrete plugins below are mocks that log the exact event payload they would
  * hand to the rail and (optionally) POST it to a configured webhook receiver.
+ *
+ * NOTE ON BANK DETAILS: no account information exists anywhere in this layer,
+ * by design AND by omission. By design, because a real `mandateRef` is a
+ * POINTER — the rail's handle for an authorisation already registered with a
+ * bank — not the account data itself, so operator software never has to hold
+ * it. By omission, because these mocks invent `mandateRef` from random bytes
+ * and accept no account input at all: there is no parameter here where a payee
+ * or its coordinates could be supplied. Wiring a real rail means adding that
+ * input, and separating the party being PAID from the party being settled WITH
+ * (see docs/00 §2.6 — payout assignment and aggregated settlement).
  */
 
 const crypto = require('crypto');

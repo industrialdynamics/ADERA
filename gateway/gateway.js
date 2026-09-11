@@ -39,9 +39,18 @@ const {
   buildCredentialsObject,
   initiateHandshake,
 } = require('./lib/ocpi');
-const { decryptEndpoint, recoverSigner, addressFromStoredPubKey } = require('./lib/crypto');
+const {
+  decryptEndpoint,
+  recoverSigner,
+  addressFromStoredPubKey,
+  handshakeSigningPayload,
+} = require('./lib/crypto');
 const { createPaymentPlugin } = require('./lib/payments');
 const { OfflineQueue } = require('./lib/offlineQueue');
+const { ReplayGuard } = require('./lib/replayGuard');
+
+/** On-chain Role enum -> OCPI role name, for checking payload claims. */
+const ROLE_NAMES = { 1: 'CPO', 2: 'EMSP', 3: 'HUB' };
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -134,7 +143,7 @@ const peerCredentials = new Map();
 // ---------------------------------------------------------------------------
 // OCPI receiver server — every OCPI route is scoped to /party/:country/:partyId
 // ---------------------------------------------------------------------------
-function buildServer(registry, payment) {
+function buildServer(registry, payment, replayGuard) {
   const app = express();
   // Capture the raw body so we can verify the handshake signature over the
   // exact bytes the sender signed.
@@ -189,16 +198,26 @@ function buildServer(registry, payment) {
     try {
       const senderPartyKey = req.header('X-ADERA-Party');
       const signature = req.header('X-ADERA-Signature');
+      const timestamp = req.header('X-ADERA-Timestamp');
+      const nonce = req.header('X-ADERA-Nonce');
       const authz = req.header('Authorization') || '';
 
       if (!authz.startsWith('Token ')) {
         return res.status(401).json(errorEnvelope(2001, 'missing OCPI Token authorization'));
       }
-      if (!senderPartyKey || !signature) {
+      if (!senderPartyKey || !signature || !timestamp || !nonce) {
         return res.status(401).json(errorEnvelope(2001, 'missing ADERA identity headers'));
       }
 
-      // 1. Resolve the sender on-chain and require they are an ACTIVE party.
+      // 1. Reject stale or already-seen handshakes BEFORE doing any chain reads,
+      //    so replayed bytes cost us nothing.
+      const fresh = replayGuard.check({ timestamp, nonce });
+      if (!fresh.ok) {
+        log(tag, 'SECURITY', `REJECTED handshake from ${senderPartyKey.slice(0, 10)}...: ${fresh.reason}`);
+        return res.status(401).json(errorEnvelope(2001, `handshake rejected: ${fresh.reason}`));
+      }
+
+      // 2. Resolve the sender on-chain and require they are an ACTIVE party.
       let onchain;
       try {
         onchain = await registry.resolveEndpoint(senderPartyKey);
@@ -209,18 +228,50 @@ function buildServer(registry, payment) {
         return res.status(403).json(errorEnvelope(2001, 'sender party is not active'));
       }
 
-      // 2. Verify the signature binds to the sender's ON-CHAIN public key.
-      const recovered = recoverSigner(req.rawBody, signature);
+      // 3. Verify the signature binds to the sender's ON-CHAIN public key. The
+      //    signature covers the timestamp and nonce as well as the body, so the
+      //    freshness checked in step 1 is itself signed and cannot be forged.
+      const recovered = recoverSigner(
+        handshakeSigningPayload({ timestamp, nonce, body: req.rawBody }),
+        signature
+      );
       const expected = addressFromStoredPubKey(onchain.pubKey);
       if (recovered.toLowerCase() !== expected.toLowerCase()) {
         log(tag, 'SECURITY', `REJECTED handshake: signer ${recovered} != on-chain ${expected} for ${senderPartyKey.slice(0, 10)}...`);
         return res.status(401).json(errorEnvelope(2001, 'signature does not match on-chain party public key'));
       }
 
-      // 3. Accept: store peer credentials, mint our TOKEN_C, respond AS this tenant.
       const senderCreds = req.body;
+
+      // 4. Bind the PAYLOAD's declared identity to the on-chain identity that
+      //    just proved key control. Step 3 proves "you hold LK/CPO's key"; it
+      //    says nothing about who the body claims to be. Without this check an
+      //    admitted party could sign correctly as itself while declaring some
+      //    other party in `roles[]` — and it is the body, not the party key,
+      //    that names the counterparty in the settlement channel opened below.
+      const claimed = senderCreds?.roles?.[0];
+      if (!claimed?.country_code || !claimed?.party_id) {
+        return res.status(400).json(errorEnvelope(2001, 'credentials payload declares no OCPI role'));
+      }
+
+      const claimedKey = await registry.partyKey(claimed.country_code, claimed.party_id);
+      if (claimedKey.toLowerCase() !== senderPartyKey.toLowerCase()) {
+        log(tag, 'SECURITY', `REJECTED handshake: payload claims ${claimed.country_code}/${claimed.party_id} but the signing party is ${senderPartyKey.slice(0, 10)}...`);
+        return res.status(403).json(errorEnvelope(2001, 'credentials payload identity does not match the signing party'));
+      }
+
+      // The declared role must match the ledger too — a CPO cannot present
+      // itself as an eMSP to attract the wrong side of a settlement.
+      const onchainRole = ROLE_NAMES[onchain.role];
+      if (onchainRole && String(claimed.role).toUpperCase() !== onchainRole) {
+        log(tag, 'SECURITY', `REJECTED handshake: ${claimed.country_code}/${claimed.party_id} claims role ${claimed.role} but is ${onchainRole} on-chain`);
+        return res.status(403).json(errorEnvelope(2001, 'credentials payload role does not match on-chain role'));
+      }
+
+      // 5. Accept: store peer credentials, mint our TOKEN_C, respond AS this tenant.
+      const senderTag = `${claimed.country_code}/${claimed.party_id}`;
       peerCredentials.set(`${tag}<-${senderPartyKey}`, senderCreds);
-      log(tag, 'handshake', `INBOUND verified from ${senderPartyKey.slice(0, 10)}... signer=${recovered}`);
+      log(tag, 'handshake', `INBOUND verified from ${senderTag} (${senderPartyKey.slice(0, 10)}...) signer=${recovered}`);
 
       const tokenC = 'TOKEN_C_' + crypto.randomBytes(16).toString('hex');
       const myCreds = buildCredentialsObject({
@@ -233,13 +284,12 @@ function buildServer(registry, payment) {
       });
 
       // Receiver also establishes its settlement channel toward the sender.
-      const senderRoleName = senderCreds?.roles?.[0]?.role || 'PEER';
+      // Both identifiers below are the ledger-verified ones from step 4 — money
+      // is never attributed to a counterparty the payload merely asserted.
       await payment.openSettlementChannel({
         localParty: tag,
-        remoteParty: senderCreds?.roles?.[0]
-          ? `${senderCreds.roles[0].country_code}/${senderCreds.roles[0].party_id}`
-          : senderPartyKey,
-        remoteRole: senderRoleName,
+        remoteParty: senderTag,
+        remoteRole: onchainRole || 'PEER',
       });
 
       return res.json(envelope(myCreds));
@@ -367,7 +417,11 @@ async function main() {
     queuesByTenant.set(tag, new OfflineQueue(`${CFG.dataDir}/cdr-queue-${t.partyId}.json`, (m) => log(tag, 'queue', m)));
   }
 
-  const app = buildServer(registry, payment);
+  // Freshness/replay state is per-process and shared by every hosted tenant:
+  // a nonce is single-use across this gateway, not merely per identity.
+  const replayGuard = new ReplayGuard({ logger: (m) => plog('replay', m) });
+
+  const app = buildServer(registry, payment, replayGuard);
   await new Promise((resolve) => app.listen(CFG.ocpiPort, '0.0.0.0', resolve));
   plog('http', `OCPI receiver listening on 0.0.0.0:${CFG.ocpiPort}, serving: ${CFG.tenants.map((t) => `/party/${t.partyCountry}/${t.partyId}`).join(', ')}`);
 

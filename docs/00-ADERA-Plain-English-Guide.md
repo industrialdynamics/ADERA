@@ -1,4 +1,4 @@
-# ADERA, Explained in Plain English
+# ADERA
 
 *Unofficial companion — not an official governance document, not part of the
 formal spec. It describes the general pattern in jurisdiction-neutral terms;
@@ -9,7 +9,7 @@ automatically on GitHub and in most modern Markdown viewers (VS Code needs
 the "Markdown Preview Mermaid Support" extension).*
 
 Companion to:
-- `01-ADERA-Whitepaper-PUCSL-Governance.md` — the formal thesis and governance spec
+- `01-ADERA-Whitepaper.md` — the formal thesis and governance spec
 - `02-System-Architecture-Security-Design.md` — the threat model and defense-in-depth spec
 
 This document follows the same structure as those two.
@@ -274,7 +274,7 @@ core thesis.** If eMSP-X signs and settles on behalf of 200 physical CPOs
 under its own single identity:
 
 - **Non-repudiation collapses to a single point of trust.** A CDR's evidentiary
-  value (§4.4, §6.1 — "an unambiguous, non-repudiable piece of evidence
+  value (§4.4, §6.2 — "an unambiguous, non-repudiable piece of evidence
   against the CPO") only works because it's cryptographically tied to
   *whichever specific entity's key* produced it. Blend 200 CPOs behind one
   identity and every CDR is attributed to eMSP-X, not to whichever physical
@@ -330,22 +330,34 @@ flowchart TB
   identity/governance events ever touch the chain).
 
   Concretely, this means one running process serves a **table of identities**
-  rather than being hardwired to a single one. The reference gateway
-  (`gateway.js`) currently reads one fixed `PARTY_ID` and one fixed
-  `MESSAGING_KEY` from its environment at boot — one container, one identity.
-  A shared eMSP-hosted deployment replaces that fixed config with a small
-  keystore (`{BET: key-BET, GAM: key-GAM, DEL: key-DEL, ...}`) and adds one
-  step at the front of every request: read which Party ID the request is
-  *for* (e.g. from the URL path, `/party/XX-BET/ocpi/2.2.1/credentials`),
-  look up that party's key, and hand it to the exact same signing/verifying
-  logic that already exists. Everything downstream of that lookup —
-  `signBody`, `recoverSigner`, `resolveEndpoint`, `openSettlementChannel` — is
-  unchanged; it never assumed there was only one identity to begin with, it
-  was just only ever given one. The per-party URL this produces (e.g.
-  `.../party/XX-BET/...`) is also exactly what gets AES-256-GCM encrypted and
-  published as *that* CPO's `endpointCipher` on the ledger (§1.5), so a
-  roaming partner resolving it lands on the right path with no idea it's
-  sharing a process with other fronted CPOs behind the scenes.
+  rather than being hardwired to a single one — and the reference gateway
+  (`gateway.js`) already works this way. It reads a tenant table from its
+  environment (`TENANT_COUNT`, then `TENANT_<i>_PARTY_ID` /
+  `TENANT_<i>_MESSAGING_KEY` per identity) and routes every request by the
+  Party ID named in the URL path
+  (`/party/<country>/<partyId>/ocpi/2.2.1/credentials`), looking up that
+  party's key and handing it to the same signing/verifying logic throughout.
+  Everything downstream of that lookup — `signBody`, `recoverSigner`,
+  `resolveEndpoint`, `openSettlementChannel` — never assumed a single identity
+  to begin with. The PoC runs one tenant per process only because that is all
+  the demo needs; adding a second fronted CPO behind the same gateway is
+  `TENANT_COUNT=2` plus a `TENANT_2_*` block, a config change rather than a
+  code change. The per-party URL this produces is also exactly what gets
+  AES-256-GCM encrypted and published as *that* CPO's `endpointCipher` on the
+  ledger (§1.5), so a roaming partner resolving it lands on the right path with
+  no idea it is sharing a process with other fronted CPOs behind the scenes.
+
+- **What the hosting eMSP can see.** One consequence worth deciding on
+  explicitly before this is offered commercially: if eMSP-C hosts CPO-B's
+  gateway, then eMSP-C operates the server through which *competing* eMSPs
+  reach CPO-B — and can therefore observe their roaming traffic, session
+  volumes and tariffs. The cryptography protects CPO-B's *identity* from its
+  host (§4.4 signatures are made with CPO-B's key), but it does not blind the
+  host to traffic passing through infrastructure it runs. Mitigations are
+  commercial and operational rather than cryptographic: contractual
+  confidentiality undertakings, or a CPO large enough to care self-hosting
+  instead. This is a genuine tradeoff of the fronted model, not a flaw in it,
+  but it should be named rather than discovered later.
 - **Sponsorship gets outsourced too.** Nothing requires a CPO to independently
   navigate the M-of-N admission process (§3.3) — an already-admitted eMSP can
   be the one calling `proposeAdmitParty` for a CPO it's onboarding
@@ -396,6 +408,63 @@ Instead, ADERA draws a hard line: *finding and trusting a roaming partner*
 
 ### 2.2 What do these payment rails actually look like?
 
+**First, the word itself.** A **payment rail** is simply *a system that moves
+money from one account to another* — industry slang, by analogy with a railway
+track the money runs along. You already use several without thinking about it:
+a card network like Visa is one rail, a bank-to-bank transfer is another, a
+mobile wallet is another. They differ in speed, cost, and the rules attached.
+"Which rail?" just means "which pipe does the money travel down?"
+
+The second thing to know is that every rail moves money in one of two
+directions, and it changes who needs to know what:
+
+- **Push** — the payer tells *their own* bank to send money out. You do this
+  every time you make a bank transfer. The payer must know where to send it,
+  so they need the payee's account details.
+- **Pull** — the payee collects, because the payer signed a permission slip
+  once, in advance. This is what a direct debit for a utility bill is. That
+  one-time permission slip is called a **mandate**, and the reference number
+  identifying it is the **mandate reference** (`mandateRef` in the code). The
+  payer's account details live at the payer's own bank; the payee never holds
+  them, and only ever quotes the reference.
+
+That distinction is what §2.6 builds on when it works out where bank details
+actually have to travel. The two reference plugins in this repo are one of
+each: `mandate-rail` is pull-style, `interbank-transfer` is push-style.
+
+**Where a mandate reference actually comes from.** This trips people up, so
+concretely, for eMSP-B paying CPO-B:
+
+1. The two companies sign a roaming contract — ordinary business paperwork,
+   entirely outside any software.
+2. As part of it, eMSP-B agrees to let CPO-B collect by direct debit, and
+   **eMSP-B signs the mandate** (today: approving it in its bank's portal, or
+   signing a form). It says *"CPO-B may debit our account."*
+3. The scheme assigns that permission a unique reference. Who generates it is
+   scheme-dependent and both patterns are normal: the **collecting party**
+   does under SEPA Direct Debit and UK Bacs, whereas with electronic mandates
+   the **bank or scheme** issues one when the payer approves in-app.
+4. From then on CPO-B holds only the reference; eMSP-B's *bank* holds the
+   account authorisation. **CPO-B never sees eMSP-B's account number.**
+5. Every session thereafter, CPO-B's system says "collect this amount under
+   mandate X" and the rail does the rest.
+
+Two consequences worth being explicit about:
+
+- **The payer owns the mandate.** eMSP-B can cancel it at any time through its
+  own bank; CPO-B holds the reference and uses it but cannot prevent
+  revocation. That asymmetry is what makes agreeing to a pull arrangement safe.
+- **Don't confuse the two reference numbers.** `mandateRef` is created **once**
+  and identifies the standing permission, reused for every session afterwards.
+  `settlementRef` is created **per payment** and identifies one specific
+  transfer. Roughly: a membership number versus one month's receipt.
+
+ADERA neither creates nor validates a mandate — it only carries the reference
+so a plugin can quote it. Note that the mock plugins in this repo therefore
+have it backwards: they *generate* `mandateRef` locally from random bytes,
+whereas a real integration **receives** it from the rail after a setup process
+that happened entirely outside the software (§2.6).
+
 ADERA doesn't mandate a specific rail — it's built to plug into whichever
 ones the local operators and banks already trust. A few common categories
 show up in almost every country's financial infrastructure, under different
@@ -445,6 +514,11 @@ underneath, an operator on an account-mandate rail and an operator on a
 real-time interbank-transfer rail (or a raw bank API) never need to agree on
 anything about payments in order to roam with each other — each side's
 gateway just calls its *own* plugin.
+
+Note that this interface assumes the counterparty and the party being paid are
+the same. §2.6 covers where account details actually come from, and the
+arrangements — such as an eMSP collecting on behalf of the CPOs it fronts —
+that require separating those two.
 
 | Reference plugin | Rail | What kind of payment | 
 | --- | --- | --- |
@@ -546,7 +620,8 @@ sequenceDiagram
   financial disputes.
 - **So what happens if a CPO claims it was never paid?** That's resolved the
   same way any commercial dispute between two counterparties is — through
-  their own bilateral contract, their own bank statements, and the
+  their own bilateral roaming agreement (the legal contract, not the smart
+  contract), their own bank statements, and the
   `settlementRef`/`cdr_id` pairing as evidence. ADERA deliberately doesn't
   arbitrate this; it only guarantees that the CDR both sides are arguing
   about is authentic and came from a verified counterparty.
@@ -554,6 +629,232 @@ sequenceDiagram
   per-CDR settlement over periodic net/batch settlement, and nothing
   standardizes the markup an eMSP applies over a CPO's wholesale tariff —
   both are bilateral business terms, not protocol rules.
+
+### 2.6 Where bank details come from, and who actually gets paid
+
+§2.5 establishes *that* the eMSP owes the CPO. Three practical questions
+follow, and they are the ones most likely to come up in a commercial
+negotiation or a regulator's review.
+
+#### "Emit a settlement instruction" — what that actually is, and how fast
+
+The gateway **never touches money.** Not at any point, in any model. What
+`settleCdr` does is hand a *payment instruction* — "pay party X, amount Y, for
+`cdr_id` Z" — to whatever bank connector the operator already uses, and later
+receive back a `settlementRef`, which is just a reference number. The funds
+themselves move bank-to-bank, entirely outside this software. The gateway's
+whole financial role is emitting a request and filing the receipt.
+
+**It does not need to be real time, and usually shouldn't be.** The *CDR*
+arrives in real time — that is the invoice, and it is what both sides
+reconcile against. The *payment* is a separate decision, and per-session
+transfers are often uneconomic: on the mock session in this repo (23.4 kWh,
+billed at 1,638 currency units), a flat interbank fee of even 50 units eats 3%
+of the entire transaction. Three timings are all legitimate:
+
+| Timing | How it works | When it makes sense |
+| --- | --- | --- |
+| **Per CDR** | One instruction per finished session | Low volume, or a rail with negligible per-transaction cost |
+| **Batched** | Accumulate CDRs, settle on a schedule (daily/weekly) | The common default — amortises fees across many sessions |
+| **Netted** | Offset what each owes the other, transfer only the difference | Two operators with heavy traffic in *both* directions (§1.7's mutual-roaming case) |
+
+This is exactly why §2.4 makes settlement decoupled and fire-and-forget: the
+payment path is allowed to be slow, batched, or temporarily offline without
+ever blocking a driver from charging.
+
+#### Bank details are not on the ledger — deliberately
+
+**No account details, ever, in any form.** This is not an omission, and
+"encrypt them like the endpoint" is not a fix:
+
+- Every admitted member holds the same consortium key (§1.5), so
+  "encrypted on-chain" would mean **readable by every competitor**.
+- The chain is append-only. Details published once could never be truly
+  changed or erased — a serious problem for banking data.
+- It would drag the ledger inside the scope of financial-data regulation, for
+  no benefit.
+
+So the ledger holds **identity**; the payment rail holds **the account**; and
+the two are linked once, bilaterally. The intended seam is
+`openSettlementChannel`, which runs *once* per relationship and returns a
+`mandateRef`.
+
+**A `mandateRef` is a pointer, not the data.** This distinction is the whole
+trick, and it is worth being exact about. In a real account-mandate scheme
+(SEPA Direct Debit, Bacs DDI and their national equivalents), the mandate
+reference identifies an *authorisation already registered with a bank* — the
+account details sit at the bank, and the reference is how both parties refer to
+the arrangement without either one's software ever holding the underlying
+coordinates. That is why "where do the bank details go?" has a satisfying
+answer: for the most part, **nowhere inside ADERA**.
+
+How much has to cross between the two operators then depends entirely on which
+direction the rail moves money:
+
+| Rail style | Who initiates the transfer | What must cross between operators |
+| --- | --- | --- |
+| **Pull** (account mandate) | The **payee** collects — the CPO pulls from the eMSP | **Nothing.** The eMSP registers the mandate with its own bank; the CPO holds only the reference |
+| **Push** (interbank transfer, bank API) | The **payer** sends — the eMSP pushes to the CPO | The payee's identifier: ideally a rail participant ID, at worst an account number |
+
+Where something does have to cross — the push case — the right way to move it
+is down the channel the handshake has already proven.
+
+#### Sending bank details down the proven line
+
+Start with the problem this solves, because it is a real and expensive one.
+
+Today, if CPO-B emails an eMSP saying *"we've changed banks, send payments to
+this account instead"* — how does the eMSP know it is really them? Mostly it
+doesn't. Someone calls the number on file and hopes. **Impersonating a supplier
+to redirect its payments is one of the most common frauds in ordinary
+business**, and a PDF on letterhead is no defence against it: a letterhead
+proves only that somebody had your email address.
+
+The ledger closes exactly that gap — not by carrying the bank details, but by
+making it certain who is sending them. Step by step, for eMSP-B needing to pay
+CPO-B:
+
+1. eMSP-B looks CPO-B up in the shared directory, and gets its address plus a
+   sample of what CPO-B's signature should look like (its public key).
+2. eMSP-B connects and says hello. CPO-B signs its reply.
+3. eMSP-B checks that signature against the directory. **Matches → genuinely
+   CPO-B. Doesn't match → hang up.**
+4. The line is now proven, so CPO-B sends its bank details down it.
+5. eMSP-B stores them and pays.
+
+If CPO-B later changes banks, it sends the new details down that same proven
+line and every partner updates automatically — no new paperwork, no phone
+calls, and no window for the fraud above.
+
+| | Bank details in a PDF | Bank details over the proven line |
+| --- | --- | --- |
+| How you know it is really CPO-B | Letterhead, and someone's judgement | Signature checked against the ledger |
+| Changing bank accounts | Re-paper it with every counterparty | Push once; everyone updates live |
+| Stored permanently in the open | In every counterparty's files | Nowhere public |
+
+**Steps 1–3 already work** — that is precisely what `docker compose up`
+demonstrates, and what the SECURITY rejection checks in README §4 exercise.
+Only steps 4–5 are missing: a small module alongside `credentials` that carries
+settlement coordinates once the line is proven.
+
+
+**None of this exists in the reference implementation.** To be unambiguous,
+since the interface's shape invites the assumption that it does: the mock
+plugins generate `mandateRef` from random bytes —
+
+```js
+const mandateRef = this.railName.toUpperCase() + '-MANDATE-' +
+                   crypto.randomBytes(4).toString('hex');   // e.g. MANDATE-RAIL-MANDATE-51af0ef9
+```
+
+— and `openSettlementChannel({ localParty, remoteParty, remoteRole })` takes no
+account input of any kind. Searching the whole codebase for any notion of an
+account, participant, payee or bank identifier returns nothing. So the
+`mandateRef` you see in the demo logs is a plausible-looking placeholder, not a
+worked example of anything: it is the right *shape* for the seam, with nothing
+behind it.
+
+The direction is wrong too, not just the value. As §2.2 sets out, a real
+mandate reference is **issued outside this software** — by the collecting party
+or the bank, at the moment the payer signs the mandate — and then handed *to*
+the gateway. A correct integration receives and stores it; it never invents
+one. So `openSettlementChannel` needs it as an **input** (alongside the payee),
+not as something it returns having made up. That is the same interface change
+§2.6's payout models require, and it is tracked in §7.
+
+#### Who gets paid: identity is not the same as payee
+
+Here is the principle that makes the rest tractable:
+
+> **The Party ID says who *did the work*. It does not say who *gets paid*.**
+
+Keeping those two separate is what lets ADERA support the commercial
+arrangements operators actually want without weakening any of §1.8's
+accountability guarantees. The CDR stays attributed to the CPO that delivered
+the energy — always, in every model below — while the *destination of the
+funds* is a property of the settlement relationship, not of the ledger entry.
+
+```mermaid
+flowchart TB
+    subgraph A["Model A — Direct bilateral"]
+        A1["eMSP-B"] -->|"pays per CDR"| A2["CPO-B"]
+    end
+    subgraph B["Model B — Payout assignment"]
+        B1["eMSP-B"] -->|"owes CPO-B<br/>pays eMSP-C"| B2["eMSP-C<br/>(CPO-B's designated payee)"]
+        B2 -.->|"internal payout,<br/>outside ADERA"| B3["CPO-B"]
+    end
+    subgraph C["Model C — Aggregated counterparty"]
+        C1["eMSP-B"] -->|"ONE netted transfer<br/>for all fronted CPOs"| C2["eMSP-C"]
+        C2 -.->|"distributes"| C3["CPO-B"]
+        C2 -.-> C4["CPO-D"]
+        C2 -.-> C5["CPO-E"]
+    end
+```
+
+**Model A — Direct bilateral.** eMSP-B pays CPO-B directly. Simplest, and the
+cleanest for accountability: money and identity follow the same path. The cost
+is relationships — every CPO needs its own bank arrangement with every eMSP it
+roams with, which grows as N×M.
+
+**Model B — Payout assignment ("pay-to").** CPO-B keeps its own identity, its
+own CDRs, and its own legal claim to the money, but *designates* eMSP-C as the
+party to be paid. eMSP-B still owes CPO-B, still reconciles per CDR against
+CPO-B, and simply routes the funds to eMSP-C's account. Legally this is
+assignment of receivables — a well-understood construct, not a novel one.
+**This is the direct answer to "can all payments for eMSP-C's CPOs go to
+eMSP-C?" — yes, and this is the cleanest way.** Accountability is untouched
+because attribution never moved.
+
+**Model C — Aggregated counterparty settlement.** eMSP-B sends eMSP-C a single
+netted payment covering every session across all of eMSP-C's fronted CPOs, and
+eMSP-C distributes internally. Far fewer, larger transfers — the cheapest
+option at volume, and attractive where per-transaction fees dominate. The
+tradeoff is real: this recreates a small clearing house for *money*, which is
+the pattern §1.1 argues against — though critically only for money, never for
+identity, so CDR-level attribution and per-CPO revocation both survive intact.
+
+| | Model A | Model B | Model C |
+| --- | --- | --- | --- |
+| Who is owed | CPO-B | CPO-B | CPO-B |
+| Who is paid | CPO-B | eMSP-C | eMSP-C |
+| CDR attribution | CPO-B | CPO-B | CPO-B |
+| Bank transfers | Many, small | Many, small | Few, netted |
+| eMSP-C holds others' funds | No | Briefly | **Yes** |
+| Recreates hub risk | No | Minimal | For money only |
+
+#### Two safeguards this needs, and one legal question
+
+**The payout designation must be signed by the CPO's own governance key.**
+Otherwise a hosting eMSP could unilaterally redirect its fronted CPOs' revenue
+to itself, and the CPO would have no way to object or exit. The CPO must also
+be able to revoke the designation the same way. This is the financial
+counterpart of §1.8's rule that the CPO retains custody of its governance key:
+that custody is what makes "we can switch hosting providers" a real option
+rather than a stated one — it protects the revenue stream, not just the
+identity.
+
+**Attribution must never follow the money.** In every model above, the CDR
+remains bound to the CPO that actually delivered the energy. The moment
+settlement convenience is allowed to blur that, §1.8's non-repudiation
+argument collapses and the regulator loses per-operator visibility.
+
+**Model C likely needs a licence.** An eMSP receiving and holding funds
+destined for third-party operators is, in most jurisdictions, a regulated
+payment activity distinct from selling charging services — it carries float
+and counterparty risk on behalf of others. This needs a legal answer before it
+is offered commercially, and it is a question for the financial regulator
+rather than the energy regulator.
+
+#### What the reference implementation would need
+
+The current `PaymentPlugin` interface (§2.3) has no way to express any of this:
+`openSettlementChannel({ localParty, remoteParty, remoteRole })` assumes the
+counterparty and the payee are the same party. Supporting Models B and C means
+separating them — a `payee` distinct from `remoteParty`, bound once at
+channel-open time and carried on the `mandateRef`, with `settleCdr` continuing
+to report against the CDR's own party for attribution. That is a small,
+contained change to a mock layer, but it is a genuine gap between the design
+described here and the code as it stands (§7).
 
 ---
 
@@ -684,6 +985,232 @@ is a full governed revocation, never a quiet edit.
 
 ---
 
+### 3.6 Who actually runs the validators, and what it costs
+
+"Who runs the ledger?" is the first question a regulator asks, and until now
+this guide has only said "the founding operators, extended by governance."
+That is not an answer. This section gives one.
+
+#### Running a validator and being a member are different things
+
+These are two separate mechanisms that happen to coincide in the sandbox, which
+makes them look like one:
+
+| | Validator set | Governance membership |
+| --- | --- | --- |
+| Decides | Who produces blocks | Who votes to admit and revoke parties |
+| Lives in | Besu / IBFT 2.0 | The `AderaRegistry` smart contract |
+| Changed by | An IBFT validator vote | A multisig proposal |
+| Needed to participate in roaming? | **No** | Yes |
+
+The reference deployment proves the distinction: **LK/EVX** is admitted by
+multisig, becomes a full governance member with a vote on future admissions,
+and runs **no validator and no gateway at all**. Membership went from two to
+three while the validator count stayed at two. Most participants in a mature
+network will look like EVX — they hold an identity, not infrastructure.
+
+#### What a validator can and cannot do
+
+This bounds how much the question matters. Validators **order transactions**.
+That is the whole of their power. A colluding majority of them could stall the
+network or refuse to include a transaction. They **cannot**:
+
+- forge any party's identity — that needs that party's private key;
+- admit, revoke or alter any party — that needs the multisig;
+- read anything private — they see exactly the public data everyone else sees.
+
+So validator power is **liveness, not authority**. A thin or partly self-
+interested validator set can slow the network down; it cannot rewrite who
+anyone is, or quietly let an unlicensed operator in. That is a materially
+weaker threat than "whoever runs the infrastructure controls the market," and
+it is the reason a modest validator count is tolerable.
+
+#### The recommended model: every eMSP runs a validator + gateway pair
+
+The natural fit, and the one the reference deployment already implements:
+**each eMSP runs one validator and one gateway, co-located**, and fronts however
+many CPOs it has commercial relationships with (§1.8).
+
+This follows directly from the project's own reasoning. §1.7 observes that CPOs
+are hardware businesses rather than software ones; §1.8 concludes they should
+outsource hosting to a fronting eMSP. If a CPO will not run a gateway, it
+certainly will not run a ledger node — so the eMSPs, who are already the
+software-operating parties, are where the infrastructure belongs.
+
+Three properties make the pairing worth keeping together:
+
+- **Outage tolerance.** Each gateway reads the chain from its *own* co-located
+  validator, so ledger reads survive an internet outage as long as the local
+  node is up (§6.2). A gateway that depended on a competitor's node would lose
+  discovery the moment that link dropped.
+- **No dependency on a rival.** An operator never has to ask a competitor's
+  infrastructure to confirm who its counterparties are.
+- **Skin in the game.** The parties benefiting from the network are the ones
+  keeping it alive.
+
+Sizing follows from IBFT 2.0's Byzantine fault tolerance, which needs
+`3f + 1` validators to survive `f` failures:
+
+| Validators | Survives | Comment |
+| --- | --- | --- |
+| 2 | **0** | The sandbox. Both must be up. Demonstration sizing only |
+| 4 | 1 | The practical production minimum |
+| 7 | 2 | Comfortable for a national network |
+| ~20+ | — | IBFT messaging is O(n²); block times degrade well before this |
+
+In a small national market with a handful of eMSPs, four to seven
+validators is both achievable and correctly sized. If the eMSP count is ever
+below four, the gap is best filled by neutral parties — the regulator, a bank, an
+industry association, a university. **Validators need not be operators at all**;
+IBFT only requires known, vetted nodes.
+
+#### Is the validator the same software as the gateway? No
+
+They are entirely different programs, and it matters for who can run what:
+
+| | Validator | Operator gateway |
+| --- | --- | --- |
+| Software | **Hyperledger Besu** — third-party, open source, off the shelf | `gateway/gateway.js` — custom to this project |
+| Language | Java | Node.js |
+| Image | `hyperledger/besu:24.12.0` | `adera/operator-gateway:1.0.0` |
+| Written here? | **No** — only *configured* (`network/`) | Yes |
+| Talks to | Other validators (peer-to-peer) | Its own validator, over JSON-RPC |
+
+Nobody is being asked to run bespoke consensus code. The ledger half is a
+widely deployed open-source Ethereum client; this project contributes a genesis
+file, an allowlist, and a launch script. The custom code is confined to the
+gateway.
+
+#### What it actually costs to run
+
+Besu's private-network guidance is a minimum of **4 GB of JVM memory** and
+SSD/NVMe storage. That number is a headroom recommendation for a private chain
+carrying real state and real traffic, not a floor — the same page notes that
+requirements peak during sync and tells you to measure your own workload. The
+very large disk figures sometimes quoted (750 GB, and currently ~1.14 TB for
+snap sync with Bonsai) are **Mainnet** numbers; Besu's private-network page asks
+for 10 GB, 20 GB recommended. ADERA's workload is about as light as an EVM
+workload gets: an empty world state, one registry contract, and a few dozen
+storage slots.
+
+**Measured, not estimated.** Running this repository's sandbox — two validators,
+two gateways, a block every two seconds:
+
+| Process | Measured |
+| --- | --- |
+| Validator (Besu, JVM) | ~720 MiB |
+| Gateway (Node.js) | ~21 MiB |
+| Besu data directory | 75 MB on disk, of which **0.7 MB is actual chain data** — the rest is RocksDB's preallocated write-ahead log |
+
+The validator's ~720 MiB is an artifact, not a requirement. With no `-Xmx` set,
+the JVM sizes its maximum heap at 25% of visible RAM — on an 8 GiB host that is
+a 1.9 GiB ceiling, and a garbage collector under no memory pressure has no
+reason to hand anything back. Give the process a smaller box and it sizes itself
+down. The same IBFT validator, run under hard container memory limits:
+
+| Container limit | Heap | Steady state | Producing blocks? |
+| --- | --- | --- | --- |
+| 1 GiB | `-Xmx512m` | ~560 MiB | Yes |
+| 768 MiB | `-Xmx384m` | ~430 MiB | Yes |
+| 512 MiB | `-Xmx256m` | ~395 MiB | Yes |
+| 384 MiB | `-Xmx192m` | ~345 MiB | Yes |
+| 1 GiB | *untuned* | ~430 MiB — the JVM picked a 256 MiB heap by itself | Yes |
+
+No OOM kills and no restarts in any of them. Besu's non-heap floor — metaspace,
+JIT code cache, thread stacks, RocksDB block cache, Netty buffers — measures at
+**110–120 MiB**; everything above that is heap you chose to grant it.
+
+Which makes the honest per-operator sizing:
+
+| | |
+| --- | --- |
+| Validator, given a generous 1 GiB heap ceiling | ~1.2 GiB |
+| Gateway | ~0.1 GiB |
+| OS, container runtime, log shipper, monitoring agent | ~0.5 GiB |
+| **Working total** | **~1.8 GiB** |
+
+**4 GiB is the right production line; 8 GiB is roughly double what this needs.**
+The headroom is not for steady state — it is for the one operation that
+genuinely costs memory, a new node joining in year five and replaying the whole
+chain from genesis, plus the permissioning sidecar (§7), TLS termination, and
+whatever else the operator co-locates.
+
+One caveat worth stating plainly: the figures above are an idle registry chain.
+The two things that would move them are a transaction pool saturated under
+sustained load and wide `eth_getLogs` scans across a long chain. ADERA's ledger
+has neither by design (§1.3) — but a *gateway* fielding heavy OCPI traffic is a
+separate sizing question from the validator, and should be sized on its own.
+
+**One caveat dominates storage, and it is a configuration choice rather than a
+workload one.** `network/genesis.json` sets `blockperiodseconds: 2`, so the
+chain produces a block every two seconds *whether or not anything happened* —
+roughly 15.8 million mostly-empty blocks a year. An empty block on this chain
+measures 735 bytes on the wire and about **1.45 KB of write volume** once Besu
+has stored the header, the body, the receipts and its indexes. That is ~23 GB
+written per year at a two-second period (less once RocksDB compacts and
+compresses what are nearly identical headers), against ~3 GB at fifteen
+seconds. For a registry that sees a handful of admissions a month, two-second
+finality buys nothing. Raising the block period to 15 seconds cuts block
+production — and the storage that follows it — about sevenfold, and costs
+nothing anyone would notice. **This is a change worth making before any
+production deployment**, and it is not currently reflected in the genesis file.
+
+Indicative cost for one operator running a co-located validator + gateway on
+AWS, sized generously, in an Asia-Pacific region (Singapore/Mumbai carry roughly
+a 20–30% premium over US regions):
+
+| Item | Spec | Approx. per month |
+| --- | --- | --- |
+| Compute | `t3.medium` — 2 vCPU, 4 GiB | ~$38 |
+| Storage | 100 GB `gp3` SSD | ~$10 |
+| Snapshots / backup | | ~$5 |
+| Data transfer | Minimal at this volume | ~$5 |
+| **Total** | | **~$58** |
+
+Notes: `t3.medium` is burstable, which suits a workload that is idle between
+blocks; step up to `m5.large` (~$90 compute) if you would rather have
+non-burstable CPU, or to `t3.large` (~$75) if you want the 8 GiB anyway. 100 GB
+of storage is four to five years of runway at the current two-second block
+period, and thirty-plus at fifteen seconds — 50 GB (~$5) is defensible once the
+block period is fixed. A one-year reserved instance or savings plan removes
+roughly 30–40%. The gateway container is small enough to share the instance.
+**Verify against the AWS pricing calculator before budgeting** — these are
+indicative figures, not quotes.
+
+This sits consistently inside §1.8's estimate that a lean operator setup lands
+in the low hundreds of dollars a month once a WAF, load balancer, KMS, backups
+and monitoring are added on top.
+
+#### Can an operator join with one prebaked container, once the regulator approves?
+
+That is the right target, and it is **half built**.
+
+**Already works:** admission itself. An existing member proposes the newcomer,
+the multisig approves, and the party is live in the registry — demonstrated
+end to end every time the sandbox runs. The gateway is a single env-driven
+image; the validator is stock Besu plus config files.
+
+**Still manual, and this is the blocker:**
+
+1. **Node permissioning.** Every existing node's allowlist must include the
+   newcomer's enode before it can peer at all. Today `permissions_config.toml`
+   is a hand-edited file on each node. §7 already records the missing piece: a
+   sidecar that watches `PartyAdmitted` / `PartyRevoked` and rewrites the
+   allowlist automatically. **Until that exists, self-service onboarding is not
+   possible**, because joining requires every incumbent to edit a file.
+2. **Bootstrap details.** `static-nodes.json` hardcodes two fixed container IPs.
+   A real network needs a published genesis file and a stable, DNS-based
+   bootnode list.
+3. **Becoming a validator** additionally requires an IBFT validator vote by the
+   existing validators — separate from the registry multisig, and not currently
+   wired to it.
+
+So the honest position: the *governance* half of onboarding is built and
+demonstrable; the *network* half is manual. Closing items 1–3 is what turns
+this into "the regulator approves you, and you run one container."
+
+---
+
 ## 4. How impersonation is actually prevented
 
 *Corresponds to Part 2 of `02-System-Architecture-Security-Design.md`.*
@@ -768,7 +1295,7 @@ any programming language: give it a key, get back the associated record.)
 Two rules fall out of this:
 
 - **No duplicate Party IDs.** Once `XX/CPO` is registered, a second attempt to
-  register the same ID is simply rejected by the contract's own logic.
+  register the same ID is simply rejected by the smart contract's own logic.
 - **No unauthorized changes.** Rotating an operator's endpoint or public key
   is only allowed if the request is signed by *that exact operator's own
   entity key* (`msg.sender == party.entity` — `msg.sender` is blockchain
@@ -798,15 +1325,17 @@ sequenceDiagram
     participant Reg as AderaRegistry (on-chain)
     participant EMSP as eMSP Gateway (receiver)
 
-    CPO->>CPO: sign(credentials body) using own messaging private key
-    CPO->>EMSP: POST /ocpi/2.2.1/credentials<br/>Authorization: Token TOKEN_A<br/>X-ADERA-Party: senderPartyKey<br/>X-ADERA-Signature: signature
+    CPO->>CPO: sign(timestamp + nonce + credentials body)<br/>using own messaging private key
+    CPO->>EMSP: POST /ocpi/2.2.1/credentials<br/>Authorization: Token TOKEN_A<br/>X-ADERA-Party: senderPartyKey<br/>X-ADERA-Signature: signature<br/>X-ADERA-Timestamp / X-ADERA-Nonce
+    EMSP->>EMSP: timestamp fresh (±5 min) and nonce never seen before?
     EMSP->>Reg: resolveEndpoint(senderPartyKey)
-    Reg-->>EMSP: pubKey, active = true
-    EMSP->>EMSP: ecrecover(body, signature) == addressFromPubKey(pubKey) ?
-    alt signature checks out
+    Reg-->>EMSP: pubKey, role, active = true
+    EMSP->>EMSP: ecrecover(timestamp+nonce+body, signature)<br/>== addressFromPubKey(pubKey) ?
+    EMSP->>EMSP: does the body CLAIM to be the same party<br/>and role the ledger says it is?
+    alt every check passes
         EMSP-->>CPO: 200 OK — credentials accepted
-    else signature doesn't match, or party inactive
-        EMSP-->>CPO: 401 Unauthorized — logged as a SECURITY rejection
+    else replayed, stale, wrong signature, or payload claims someone else
+        EMSP-->>CPO: 401 / 403 — logged as a SECURITY rejection
     end
 ```
 
@@ -951,7 +1480,7 @@ sequenceDiagram
     participant CPOGW as CPO-B Gateway
     participant Ledger as ADERA Ledger (shared, both sides read it)
     participant EMSPGW as eMSP-X Gateway
-    participant Bank as CPO-B's Bank / national-rail connector
+    participant Rail as Banking rail / national-rail connector
 
     Note over CPOGW,Ledger: First contact ever between CPO-B and eMSP-X
     CPOGW->>Ledger: resolveEndpoint(eMSP-X's Party ID)
@@ -960,7 +1489,7 @@ sequenceDiagram
     CPOGW->>EMSPGW: signed OCPI credentials handshake (§4.4)
     EMSPGW->>Ledger: resolveEndpoint(CPO-B's Party ID) — verifies the signature back
     EMSPGW-->>CPOGW: 200 OK — roaming relationship established
-    CPOGW->>CPOGW: payment plugin: openSettlementChannel(...) (§2.3)
+    EMSPGW->>EMSPGW: payment plugin: openSettlementChannel(...) (§2.3)
 
     Note over Driver,Charger: Driver plugs in and authenticates via the eMSP-X app
     Driver->>Charger: start charging (authenticated via eMSP-X token)
@@ -969,11 +1498,26 @@ sequenceDiagram
     Note over Driver,Charger: ... charging happens, driver unplugs ...
     Charger->>CPOGW: session ends
     CPOGW->>EMSPGW: final CDR (the bill for this session), off-chain
-    CPOGW->>CPOGW: payment plugin: settleCdr(channelId, cdr)
-    CPOGW-)Bank: fire-and-forget settlement webhook (§2.4)
-    Bank--)CPOGW: settlementRef (whenever the bank actually posts it)
-    Note over CPOGW,Bank: If the bank is slow/offline, the CDR sits safely<br/>in the durable offline queue (§5.3) — driver's<br/>charging experience was never blocked by this.
+    EMSPGW->>EMSPGW: payment plugin: settleCdr(channelId, cdr)
+    EMSPGW-)Rail: fire-and-forget settlement instruction (§2.4)
+    Rail--)CPOGW: funds + settlementRef (whenever the rail actually posts it)
+    Note over EMSPGW,Rail: If the rail is slow/offline, the CDR sits safely<br/>in the durable offline queue (§5.3) — the driver's<br/>charging experience was never blocked by this.
 ```
+
+Two clarifications this diagram is easy to misread:
+
+- **Who initiates the handshake vs. who initiates the roaming.** §1.7's rule
+  that the roaming conversation always runs eMSP-role → CPO-role describes the
+  *operational* flow: the eMSP vouches for a driver, the CPO delivers energy.
+  The one-time credentials handshake in phase 0 is different — plain OCPI
+  permits *either* side to open it, and here CPO-B does, because it is the side
+  that has just been handed a registration token. Both readings are correct;
+  they describe different moments.
+- **Who pays whom.** The money leg above runs eMSP → CPO, matching §2.5. Note
+  that the reference implementation currently drives `settleCdr` from the
+  **CPO** gateway instead, because the CPO is the demo's initiator and the
+  payment plugin is a mock with no notion of direction. That is a proof-of-
+  concept artifact, not the intended economic model (§7).
 
 Notice what the ledger was actually used for in this entire story: **exactly
 two read operations**, both purely to look up an address and a public key.
@@ -981,7 +1525,70 @@ Everything else — the actual charging, the bill, the payment — happened
 directly between the two companies and their own bank, off-chain, exactly as
 the whitepaper's core thesis in §1 describes.
 
-### 6.1 What protocol handles each step — and where a CPO could still cheat
+### 6.1 Which protocol carries which step: OCPP vs OCPI vs the ledger
+
+The single most useful thing to hold onto is that **three different systems
+each own a different stretch of the journey, and they never overlap**:
+
+```mermaid
+flowchart LR
+    Driver["Driver<br/>+ phone app"]
+    Charger["Physical charger<br/>(hardware)"]
+    CPOBack["CPO backend"]
+    EMSPBack["eMSP backend"]
+    Ledger[("ADERA ledger<br/>shared directory")]
+
+    Charger <-->|"OCPP<br/>never leaves the CPO"| CPOBack
+    CPOBack <-->|"OCPI<br/>the ONLY protocol between companies"| EMSPBack
+    EMSPBack <-->|"the eMSP's own app protocol"| Driver
+    Driver -.->|plugs in| Charger
+    CPOBack -.->|"looked up ONCE,<br/>before any driver"| Ledger
+    EMSPBack -.->|"looked up ONCE,<br/>before any driver"| Ledger
+```
+
+- **OCPP (Open Charge Point Protocol)** is how a charging post talks to *its
+  own operator's* backend. It is internal plumbing: it never crosses a company
+  boundary, and it is not part of ADERA at all. No OCPP appears anywhere in
+  this repository.
+- **OCPI (Open Charge Point Interface)** is how two *companies* talk. This is
+  the only inter-company protocol in the whole design.
+- **The ledger** is consulted at neither of those moments. It answers one
+  question — *"is this company real, where do I reach them, and what does their
+  signature look like?"* — before the two companies have ever spoken. Think of
+  it as a shared phone book that no single company owns and in which nobody can
+  forge an entry.
+
+Walking one full session through, for a driver whose app is **eMSP-B**,
+charging at a station run by **CPO-B**:
+
+| Phase | What happens | Protocol | Direction | What is actually shared |
+| --- | --- | --- | --- | --- |
+| **0. Introduction**<br/>*once, ever* | The two companies establish a roaming relationship: ledger lookup, then a signed credentials handshake exchanging API tokens | Ledger read, then **OCPI** `credentials` | eMSP-B ⇄ CPO-B | Public identity, public key, encrypted endpoint, API tokens. No driver exists yet |
+| **1. Catalogue**<br/>*continuous background* | CPO-B publishes where its chargers are, which are free, and what it charges | **OCPI** `Locations`, `Tariffs` | CPO-B → eMSP-B | Station locations, availability, prices. Nothing driver-related |
+| **2. Authorisation**<br/>*driver arrives* | Either the driver taps a card (charger asks CPO, CPO asks eMSP-B "is this token good?") or presses start in the app (eMSP-B tells CPO to start) | **OCPP** `Authorize` internally, **OCPI** `Tokens` or `Commands` between companies | CPO-B ⇄ eMSP-B | **A token/contract ID and a yes/no.** Not the driver's name, card, or address |
+| **3. Charging**<br/>*live* | Meter readings flow up from the hardware; the eMSP is kept updated so its app can show live kWh and running cost | **OCPP** `MeterValues` internally, **OCPI** `Sessions` between companies | CPO-B → eMSP-B | Energy delivered so far, elapsed time, running cost |
+| **4. Completion**<br/>*driver unplugs* | The charger reports the final reading; CPO-B computes the bill and sends it as a **CDR** — final, immutable, and the shared source of truth both sides reconcile against | **OCPP** `StopTransaction` internally, **OCPI** `CDRs` between companies | CPO-B → eMSP-B | Total kWh, duration, tariff applied, total cost, and a stable `cdr_id` |
+| **5. Money** | Two separate legs — see §2.5 and §2.6 | Not OCPI at all; a banking rail | eMSP-B → CPO-B | Nothing new; keyed by the `cdr_id` from phase 4 |
+
+Two things worth drawing out:
+
+- **The driver's personal data never reaches the CPO.** In phase 2 the CPO
+  learns "this is *some* valid eMSP-B customer" and nothing more. The eMSP
+  vouches; the CPO doesn't need to know who for.
+- **The ledger was read exactly twice, both in phase 0, both read-only.**
+  Once two operators know each other, every subsequent session — thousands of
+  them — touches the chain zero times. This is the whole reason the design
+  scales without the ledger becoming a bottleneck, and the concrete meaning of
+  §1.3's "operational data never goes on-chain."
+
+**What of this exists in the repo:** phase 0 is fully implemented and is what
+`docker compose up` demonstrates. Phase 4 has a stub receiver that logs a CDR
+and returns `{accepted:true}`. Phases 1, 2 and 3 are design-only — `Locations`,
+`Tariffs`, `Tokens`, `Sessions` and `Commands` are not built (§7). That is
+consistent with the repo's stated purpose: it is a proof of ADERA's
+identity/discovery/settlement layer, not a full OCPI server.
+
+### 6.2 Where a CPO could still cheat
 
 It's tempting to think tariff transparency closes the loop entirely: the
 eMSP receives the CPO's published rates over OCPI, shows them to the driver,
@@ -1094,11 +1701,14 @@ source, not assumed from the docs.
 - `contracts/AderaRegistry.sol` mirrors the whitepaper almost exactly — the
   `Role` enum, the 1:1 `entityToParty` binding, the propose/confirm/execute
   multisig flow, the auditor's `auditProbe`-only power, every event name.
-- The signed handshake (`gateway/lib/crypto.js` + `ocpi.js` + the
-  `/credentials` route in `gateway.js`) implements §4.4 precisely: EIP-191
-  signing, the recovered signer checked against the on-chain `pubKey`, a 401
-  and a `SECURITY`-tagged log line on mismatch — same header names
-  (`X-ADERA-Party`, `X-ADERA-Signature`) the docs describe.
+- The signed handshake (`gateway/lib/crypto.js` + `ocpi.js` + `replayGuard.js`
+  + the `/credentials` route in `gateway.js`) implements §4.4 precisely:
+  EIP-191 signing over timestamp ‖ nonce ‖ body, a ±5-minute freshness window,
+  a single-use nonce, the recovered signer checked against the on-chain
+  `pubKey`, and the payload's declared party *and role* checked against the
+  ledger — each failure a 401/403 with a `SECURITY`-tagged log line. Headers
+  are `X-ADERA-Party`, `X-ADERA-Signature`, `X-ADERA-Timestamp`,
+  `X-ADERA-Nonce`.
 - The encrypted endpoint (`iv‖tag‖ciphertext` AES-256-GCM) matches
   §1.5/§4.5 exactly.
 - Dynamic routing (`registry.js`: no static peer table, live `resolveEndpoint`
@@ -1136,7 +1746,7 @@ code matches that admission — no surprises.
 - The `null` payment plugin is documented as "no automation" but the code
   (`payments.js`) gives it the identical webhook/logging behavior as the
   real rail plugins — just a different `railName` label, not an actual no-op.
-- The CDR-quantity trust gap from §6.1 is visible directly in the code, not
+- The CDR-quantity trust gap from §6.2 is visible directly in the code, not
   just theoretical: `gateway.js` hardcodes a mock CDR
   (`total_energy_kwh: 23.4, total_cost: 1638.0`) and `settleCdr` never
   validates against tariff data.
@@ -1149,6 +1759,71 @@ code matches that admission — no surprises.
   evaluating how much of a real deployment already exists versus still needs
   to be built.
 
+**Known and deliberately deferred** — these were identified, judged not worth
+fixing at proof-of-concept scope, and are recorded here so they are not
+mistaken for oversights later. Each would need addressing before production:
+
+- **`TOKEN_A` is accepted without being checked.** The receiver verifies only
+  that the `Authorization` header begins with `Token `; the value itself is
+  never validated, so any string is accepted. This is *almost* philosophically
+  consistent — §4.4 explains that ADERA deliberately makes TOKEN_A
+  insufficient on its own and moves real authority to the on-chain signature —
+  but "insufficient" was meant to mean "necessary but not sufficient", not
+  "ignored". A production receiver should hold a per-peer TOKEN_A and check it.
+- **Proposals can never be cancelled.** `AderaRegistry.sol` carries a
+  `cancelled` flag that three `require` statements read and `getProposal`
+  returns, but no function ever sets it — there is no cancel entrypoint. A
+  proposal that turns out to be a mistake can only be starved of confirmations,
+  never withdrawn.
+- **A revoked party's entity key is never released.** `_registerParty` enforces
+  one entity key per party via `entityToParty`, but `RevokeParty` never clears
+  that mapping (nor `exists`). So a revoked operator's legal-entity key is
+  permanently unable to register under any new Party ID, and the revoked Party
+  ID can never be reissued. The contract's own header comment claims the
+  binding "can only be dissolved by a multisig REVOKE" — in the current code it
+  is not dissolved at all. Either the comment or the code should change; which
+  one is a governance policy decision, not a coding one.
+- **Admission automatically grants a governance vote, while the threshold stays
+  fixed.** `AdmitParty` calls `_addMember(entity)`, so every newly admitted
+  operator becomes a multisig signer. The threshold does not scale with them:
+  2-of-3 is reasonable, but the same registry at twenty members is still
+  2-of-20. A real deployment needs a stated policy — a proportional threshold,
+  or separating "is an admitted party" from "is a governance signer", which the
+  contract already supports via the distinct `AddMember` action.
+- **The replay guard is per-process, in-memory state.** `replayGuard.js` holds
+  seen nonces in a local `Map`. An operator running several gateway replicas
+  behind a load balancer would need a shared store (Redis or equivalent), or a
+  replay could simply be aimed at a replica that has not seen that nonce. The
+  PoC runs one process per gateway, so this is sufficient here and no more.
+- **Each tenant can only be configured with one peer.** The gateway genuinely
+  hosts a *table* of Party identities (§1.8), but `loadTenants()` reads a single
+  `TENANT_<i>_PEER_ID`, so the peer list per identity is at most one. The tenant
+  table is real; the peer table is not yet.
+- **The payment layer has no notion of a payee, or of direction.**
+  `openSettlementChannel({ localParty, remoteParty, remoteRole })` assumes the
+  counterparty and the party to be paid are the same, so the payout-assignment
+  and aggregated-settlement models in §2.6 cannot currently be expressed:
+  there is no `payee` field. Relatedly, the reference implementation drives
+  `settleCdr` from the **CPO** gateway because the CPO is the demo's initiator,
+  whereas the economic model (§2.5) has the eMSP paying the CPO. Neither shows
+  up as a bug today only because the plugins are mocks that move no money and
+  encode no direction. Both need resolving before any real rail is connected.
+- **Settlement coordinates are never exchanged at all.** Sending bank details
+  down the ledger-verified channel once the handshake has proven who is on the
+  other end (§2.6) is the one part of the settlement story that is buildable
+  today, and it is not built. The hard half already works: the signed handshake
+  (steps 1–3) is exactly what the running stack demonstrates. What is missing
+  is the easy half: a module alongside `credentials` that carries the
+  coordinates once the line is proven, and somewhere to keep them. Until then
+  the only route is out of band, in the roaming agreement.
+- **No automated tests and no CI.** The stack is validated by running it —
+  `docker compose up --build` exercises consensus, deployment, governance,
+  discovery, the handshake and settlement end to end, and the checks in
+  README §4 cover the security path. That is adequate evidence for a PoC and no
+  substitute for a test suite in production. Dependency versions *are* pinned
+  (`package-lock.json` in both Node projects, installed with `npm ci`), so
+  builds are at least reproducible over time.
+
 ---
 
 ## 8. Quick-reference glossary
@@ -1158,6 +1833,7 @@ code matches that admission — no surprises.
 | AES-256-GCM | A fast, standard symmetric (same-key) encryption method; used here to hide network endpoints from non-members. |
 | CDR (Charge Detail Record) | The bill/record for one completed charging session. |
 | Consensus | The process by which independent parties running their own copies of a shared ledger agree on its contents. |
+| Contract — **two different meanings** | **Smart contract**: code stored on the ledger (`AderaRegistry.sol`), visible to every member, permanent. **Legal contract**: the ordinary commercial roaming agreement between two companies — a document, private to the two signatories, renegotiable, and where commercial terms and *bank details* actually live. This guide says "smart contract" or "roaming contract/agreement" rather than a bare "contract" wherever the difference matters. |
 | CPO (Charge Point Operator) | A company that owns/operates physical EV chargers. |
 | Digital signature | Cryptographic proof that a specific private key produced or approved a message, checkable by anyone with the matching public key. |
 | eMSP (e-Mobility Service Provider) | A company that sells charging access to drivers across multiple CPOs' networks and bills them, without necessarily owning any chargers. |
@@ -1168,15 +1844,18 @@ code matches that admission — no surprises.
 | IBFT 2.0 | The proof-of-authority consensus algorithm ADERA uses: a known validator set, immediate finality, no mining. |
 | Idempotency | A system design property where repeating the same operation twice has the same effect as doing it once — prevents double-charging on retries. |
 | Ledger | A shared, jointly-maintained, tamper-evident record book — here, used only for identity/discovery, never for OCPI traffic or money. |
+| Mandate (payment) | A permission slip signed once, in advance, allowing another party to collect money from your account — what a direct debit for a utility bill runs on. The **mandate reference** (`mandateRef`) is its ID: a pointer to an arrangement held at a bank, never the account details themselves. |
 | mTLS (mutual TLS) | Encrypted HTTPS-style connection where *both* sides (not just the server) prove their identity with a certificate. |
 | Multisig | A rule requiring M-of-N approvals from a defined group before an action (e.g., admitting a new operator) takes effect. |
 | OCPI (Open Charge Point Interface) | The open protocol defining how a CPO's and an eMSP's systems exchange roaming messages (sessions, tariffs, CDRs). |
 | OCPP (Open Charge Point Protocol) | A *different* protocol, between a charger and its own CPO's back-end — not the subject of this whitepaper. |
 | Off-chain | Happening directly between parties, never recorded on the shared ledger. |
 | On-chain | Recorded on the shared ledger itself. |
+| Payment rail | A system that moves money from one account to another — a card network, a bank-to-bank transfer scheme, a mobile wallet. Slang, by analogy with a railway track. ADERA plugs into whichever one operators already use and never moves money itself. |
 | Permissioned (ledger/network) | Membership is a closed, vetted list, unlike public blockchains anyone can join. |
 | Private key / public key | A mathematically linked pair: the private half proves identity by signing (never shared); the public half lets anyone verify that signature (shared freely). |
 | Proof-of-authority | A consensus model where a known, vetted set of validators (not anonymous miners) produce blocks. |
+| Push vs. pull payment | The two directions money can move. **Push**: the payer sends it (a bank transfer) — so the payer needs the payee's account details. **Pull**: the payee collects under a mandate (a direct debit) — so no account details need to cross between the two companies at all. |
 | Quorum | The minimum number/proportion of validators that must agree for consensus to proceed. |
 | Regulator (auditor role) | Whichever national authority licenses and oversees charging operators; holds a dedicated, read-only auditor key on the ledger. |
 | Roaming | Letting a customer of one operator use a different operator's infrastructure — borrowed from the mobile-network industry. |
@@ -1191,7 +1870,7 @@ code matches that admission — no surprises.
 ---
 
 *This document introduces no new claims, numbers, or design decisions beyond
-what's in `01-ADERA-Whitepaper-PUCSL-Governance.md` and
+what's in `01-ADERA-Whitepaper.md` and
 `02-System-Architecture-Security-Design.md`. Where anything here appears to
 contradict those two documents, the whitepaper and architecture doc are the
 authoritative source.*

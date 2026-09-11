@@ -5,7 +5,7 @@ tokenless, hubless EV-roaming framework: a permissioned Hyperledger Besu (IBFT
 2.0) ledger acting as a zero-trust OCPI directory, with direct peer-to-peer OCPI
 between operators and pluggable local payment settlement.
 
-> **Docs:** [`docs/01-ADERA-Whitepaper-PUCSL-Governance.md`](docs/01-ADERA-Whitepaper-PUCSL-Governance.md) ·
+> **Docs:** [`docs/01-ADERA-Whitepaper.md`](docs/01-ADERA-Whitepaper.md) ·
 > [`docs/02-System-Architecture-Security-Design.md`](docs/02-System-Architecture-Security-Design.md)
 
 ---
@@ -37,8 +37,13 @@ ADERA/
 ├── docker-compose.yml            # 5 services on an isolated 172.28.0.0/16 bridge
 ├── .env                          # THROWAWAY test keys (local only)
 ├── .devcontainer/devcontainer.json
+├── demo/
+│   ├── step.sh                   # step-by-step bring-up, one container at a time
+│   ├── verify.sh                 # one-command live demo / smoke test
+│   └── attack-suite.js           # forged, replayed & mis-declared handshakes
 ├── docs/
-│   ├── 01-ADERA-Whitepaper-PUCSL-Governance.md
+│   ├── 00-ADERA-Plain-English-Guide.md   # start here; §7 = implemented vs. described
+│   ├── 01-ADERA-Whitepaper.md
 │   └── 02-System-Architecture-Security-Design.md
 ├── network/                      # Besu IBFT 2.0 network material (pre-generated, valid)
 │   ├── genesis.json              # extraData encodes both validators (real keys)
@@ -51,15 +56,18 @@ ADERA/
 │   └── deployer/                 # compiles (bare solc) + deploys + seeds scenario
 │       ├── Dockerfile
 │       ├── package.json
+│       ├── package-lock.json     # pinned tree; images build via `npm ci`
 │       └── deploy.js
 └── gateway/
     ├── Dockerfile
     ├── package.json
+    ├── package-lock.json         # pinned tree; images build via `npm ci`
     ├── gateway.js                # discovery + OCPI handshake + settlement
     └── lib/
         ├── registry.js           # on-chain discovery client
         ├── ocpi.js               # OCPI 2.2.1 + signed handshake
         ├── crypto.js             # endpoint AES-GCM + signature/pubkey binding
+        ├── replayGuard.js        # handshake freshness + single-use nonce
         ├── payments.js           # pluggable payment layer (mandate rail / interbank transfer)
         └── offlineQueue.js       # durable, ordered CDR queue
 ```
@@ -120,7 +128,74 @@ future cloud-dependency testing, so those never touch your host either.
 
 ## Verify it worked
 
-### 1. Watch the logs for the key milestones
+### 0. Understand it first: bring the containers up one at a time
+
+If `docker compose up` feels like a wall of interleaved logs, run this instead:
+
+```bash
+./demo/step.sh
+```
+
+It starts the five containers **one per step**, pausing between each, and shows
+the observable state change that container caused — so you can see what each one
+actually contributes rather than inferring it from a merged log. Add `--auto`
+to run it without the pauses.
+
+The sequence is built to make the dependencies visible:
+
+| Step | Container | What it proves |
+| ---- | --------- | -------------- |
+| 1 | `adera-validator-cpo` alone | RPC answers but **block height stays at 0** — one node cannot finalise, because IBFT 2.0 needs a quorum of the two-member validator set |
+| 2 | `adera-validator-emsp` | `net_peerCount` → `0x1` and the height starts climbing. Consensus, not just uptime |
+| 3 | `adera-contract-deployer` | Deploy → multisig admission → regulator probe → writes `/shared/deployment.json`, then **exits 0 and stays exited** (it is a job, not a service) |
+| 4 | `adera-gateway-emsp` | Boots, reads the manifest, serves OCPI, and *waits*. No traffic yet |
+| 5 | `adera-gateway-cpo` | On-chain discovery → decrypt endpoint → signed handshake → settlement, with the receiver's side shown alongside |
+| 6 | — | `docker compose ps -a` plus a diagram of what talks to what |
+| 7 | — | Forged, replayed and mis-declared handshakes, and the `SECURITY` rejections they produce |
+| 8 | — | Runs `demo/verify.sh` for the full check |
+
+Starting one service at a time is just `--no-deps`, which tells compose to ignore
+the `depends_on` graph:
+
+```bash
+docker compose up -d --no-deps adera-validator-cpo    # long-running service
+docker compose up    --no-deps adera-contract-deployer # one-shot job, attached
+```
+
+**The containers are connected by exactly three things:**
+
+1. **The `adera-net` bridge** (`172.28.0.0/16`) — every container resolves the
+   others by container name, so `http://adera-gateway-emsp:9102` just works. The
+   two validators additionally sit on *fixed* IPs (`.11`, `.12`) because those
+   addresses are baked into `static-nodes.json` and `permissions_config.toml`.
+2. **The `adera-shared` volume** — the deployer's only lasting output is
+   `/shared/deployment.json` (registry address + ABI). Both gateways mount that
+   volume **read-only**. Nothing hardcodes the contract address anywhere.
+3. **`depends_on` in `docker-compose.yml`** — validators → deployer
+   (`service_completed_successfully`, i.e. it must exit 0) → gateways.
+
+Note what is *not* in that list: the CPO gateway never reaches the eMSP gateway
+*through* the chain. It uses the chain to **find** and **authenticate** the peer,
+then calls it **directly** over HTTP. That is the "hubless" claim in action.
+
+### 1. The fastest path: one script
+
+```bash
+./demo/verify.sh
+```
+
+Checks the five claims the sandbox exists to demonstrate — consensus,
+governance, regulator oversight, the signed handshake, and rejection of forged /
+replayed / mis-declared handshakes — against the **running stack**, printing
+PASS/FAIL per claim and exiting non-zero if anything is wrong. Needs only
+`docker` and `curl`. Use this to demo; use the manual steps below to explain.
+
+The interesting half is section 5: the attacks are run **by a legitimately
+admitted party holding a valid key** (`demo/attack-suite.js`), not by an
+outsider, because that is the threat model the on-chain binding actually exists
+to defeat.
+
+### 2. Watch the logs for the key milestones
 
 ```bash
 docker compose logs -f adera-contract-deployer
@@ -143,7 +218,7 @@ docker compose logs -f adera-gateway-emsp
 
 ```
 [gateway:LK/CPO] discover   | decrypted peer OCPI endpoint: http://adera-gateway-emsp:9102/party/LK/EMS/ocpi/versions
-[gateway:LK/CPO] handshake  | handshake step 3: POST http://adera-gateway-emsp:9102/party/LK/EMS/ocpi/2.2.1/credentials (signed, ...)
+[gateway:LK/CPO] handshake  | handshake step 3: POST http://adera-gateway-emsp:9102/party/LK/EMS/ocpi/2.2.1/credentials (signed, party=0x..., nonce=...)
 [gateway:LK/CPO] handshake  | OUTBOUND verified: peer returned LK/EMS token=TOKEN_C_...
 [gateway:LK/CPO] settle     | settlement channel open: chan_... via mandate-rail
 [gateway:LK/CPO] settle     | CDR CDR_... settled: MANDATE-RAIL-STL-... (ACCEPTED)
@@ -153,11 +228,14 @@ docker compose logs -f adera-gateway-emsp
 **eMSP gateway (receiver)** — expect:
 
 ```
-[gateway:LK/EMS] handshake  | INBOUND verified from 0x...... signer=0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC
+[gateway:LK/EMS] handshake  | INBOUND verified from LK/CPO (0x...) signer=0x70997970C51812dc3A010C7d01b50e0d17dc79C8
 [gateway:LK/EMS] webhook-in | settlement event received: {...}
 ```
 
-### 2. Query the chain directly (host)
+(The signer shown is the **CPO's** messaging identity — the eMSP is verifying
+who called it, not itself.)
+
+### 3. Query the chain directly (host)
 
 ```bash
 # Block height climbing (consensus is live)
@@ -175,7 +253,7 @@ curl -s -X POST http://localhost:8545 -H 'Content-Type: application/json' \
 # expect: "0x1"
 ```
 
-### 3. Gateway health
+### 4. Gateway health
 
 ```bash
 curl -s http://localhost:9101/health   # {"status":"ok","tenants":[{"party":"LK/CPO","role":"CPO"}]}
@@ -189,7 +267,23 @@ identity behind the same gateway is a config change (`TENANT_COUNT=2` plus a
 `TENANT_2_*` block), not a code change — see `docs/00-ADERA-Plain-English-Guide.md`
 §1.8.
 
-### 4. (Optional) Prove the identity-hijack defense
+### 5. (Optional) Prove the identity-hijack defense
+
+The receiver enforces four independent checks on every inbound handshake, each
+logged as a `SECURITY` rejection when it trips:
+
+| Check | Rejects | Status |
+| ----- | ------- | ------ |
+| Freshness — signed timestamp within ±5 min | a captured handshake replayed later | 401 |
+| Single-use nonce | the same signed request sent twice | 401 |
+| Signature vs. on-chain `pubKey` | anyone without the party's messaging key | 401 |
+| Payload identity + role vs. ledger | an admitted party declaring itself to be a *different* party | 403 |
+
+The timestamp and nonce are covered *by the signature*, so an attacker cannot
+refresh a captured request by swapping in a new timestamp and nonce — that
+invalidates the signature. The last check matters because it is the credentials
+payload, not the party key, that names the counterparty on the settlement
+channel the receiver then opens.
 
 An unsigned / wrongly-signed credentials POST is rejected against the on-chain
 public key:

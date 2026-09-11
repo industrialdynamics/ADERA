@@ -43,7 +43,7 @@ services:
       ADERA_ROLE: "cpo"
       ADERA_P2P_HOST: "172.28.0.11"
     volumes:
-      - ./network:/config
+      - ./network:/config:ro
       - besu-cpo-data:/opt/besu/data
     ports:
       - "8545:8545"   # JSON-RPC (host -> CPO validator)
@@ -66,7 +66,7 @@ services:
       ADERA_ROLE: "emsp"
       ADERA_P2P_HOST: "172.28.0.12"
     volumes:
-      - ./network:/config
+      - ./network:/config:ro
       - besu-emsp-data:/opt/besu/data
     ports:
       - "8547:8545"   # JSON-RPC (host -> eMSP validator)

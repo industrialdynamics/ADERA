@@ -11,6 +11,11 @@
  *    messaging key; the receiver verifies the recovered address against the
  *    sender's on-chain public key. A rogue node cannot forge another party's
  *    signature, so it cannot impersonate another Party ID.
+ *
+ *  - Freshness: the signature covers a timestamp and a single-use nonce as well
+ *    as the body, so a captured handshake cannot be replayed later. This is what
+ *    makes the Layer 6 claim ("proving I hold this key, RIGHT NOW" — docs/02
+ *    §4.4) literally true rather than merely "I held it at some point".
  */
 
 const crypto = require('crypto');
@@ -29,6 +34,18 @@ function decryptEndpoint(cipherHex, keyHex) {
   decipher.setAuthTag(tag);
   const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
   return pt.toString('utf8');
+}
+
+/**
+ * The exact bytes both sides sign / verify for a credentials handshake.
+ *
+ * Defined in ONE place so the initiator and the receiver can never drift apart:
+ * if this format changes, both ends change with it. The timestamp and nonce are
+ * carried as headers rather than injected into the credentials object so the
+ * POST body stays a byte-for-byte valid OCPI 2.2.1 payload.
+ */
+function handshakeSigningPayload({ timestamp, nonce, body }) {
+  return `${timestamp}\n${nonce}\n${body}`;
 }
 
 /** Sign a canonical UTF-8 body with the gateway's messaging key (EIP-191). */
@@ -50,6 +67,7 @@ function addressFromStoredPubKey(pubKeyHex) {
 
 module.exports = {
   decryptEndpoint,
+  handshakeSigningPayload,
   signBody,
   recoverSigner,
   addressFromStoredPubKey,

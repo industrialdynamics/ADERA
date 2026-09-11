@@ -9,9 +9,14 @@
  * messaging key and carries the sender's on-chain party key. The receiver
  * authenticates it against the registry rather than trusting a pre-shared
  * TOKEN_A alone — the classic weak point of vanilla OCPI onboarding.
+ *
+ * The signature covers a timestamp and a single-use nonce alongside the body,
+ * so a captured handshake cannot be replayed. Both travel as headers, leaving
+ * the POST body a byte-for-byte valid OCPI 2.2.1 credentials object.
  */
 
-const { signBody } = require('./crypto');
+const crypto = require('crypto');
+const { signBody, handshakeSigningPayload } = require('./crypto');
 
 const OCPI_VERSION = '2.2.1';
 
@@ -106,9 +111,14 @@ async function initiateHandshake({
   if (!credsEndpoint) throw new Error('peer exposes no credentials endpoint');
 
   const bodyString = JSON.stringify(localCredentials);
-  const signature = await signBody(messagingKey, bodyString);
+  const timestamp = new Date().toISOString();
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const signature = await signBody(
+    messagingKey,
+    handshakeSigningPayload({ timestamp, nonce, body: bodyString })
+  );
 
-  logger(`handshake step 3: POST ${credsEndpoint.url} (signed, party=${localPartyKey.slice(0, 10)}...)`);
+  logger(`handshake step 3: POST ${credsEndpoint.url} (signed, party=${localPartyKey.slice(0, 10)}..., nonce=${nonce.slice(0, 8)}...)`);
   const postRes = await httpJson(credsEndpoint.url, {
     method: 'POST',
     headers: {
@@ -116,6 +126,8 @@ async function initiateHandshake({
       'Content-Type': 'application/json',
       'X-ADERA-Party': localPartyKey,
       'X-ADERA-Signature': signature,
+      'X-ADERA-Timestamp': timestamp,
+      'X-ADERA-Nonce': nonce,
     },
     body: bodyString,
   });

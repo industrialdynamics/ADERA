@@ -1,6 +1,6 @@
 # ADERA — Detailed System Architecture & Security Design
 
-*Companion to the Whitepaper (`01-ADERA-Whitepaper-PUCSL-Governance.md`).
+*Companion to the Whitepaper (`01-ADERA-Whitepaper.md`).
 This document is the threat model and the defense-in-depth specification.*
 
 ---
@@ -155,19 +155,36 @@ far end actually holds that key, right now*:
 ```
 Initiator (CPO):
    body      = JSON(credentials)
-   signature = sign(messagingKey, body)           # EIP-191
+   timestamp = now()                              # ISO-8601
+   nonce     = random(16 bytes)                   # single use
+   signature = sign(messagingKey,                 # EIP-191
+                    timestamp || nonce || body)   # freshness is SIGNED, not just sent
    POST /ocpi/2.2.1/credentials
         Authorization: Token <TOKEN_A>
         X-ADERA-Party: <senderPartyKey>
         X-ADERA-Signature: <signature>
+        X-ADERA-Timestamp: <timestamp>
+        X-ADERA-Nonce: <nonce>
 
 Receiver (eMSP):
-   (pubKey, active) = registry.resolveEndpoint(senderPartyKey)   # on-chain read
+   require |now() - timestamp| <= 5 min                          # freshness
+   require nonce not seen before                                 # single use
+   (pubKey, role, active) = registry.resolveEndpoint(senderPartyKey)
    require active
-   recovered = ecrecover(body, signature)
-   require recovered == addressFromPubKey(pubKey)                # binding check
-   -> otherwise 401, logged as a SECURITY rejection
+   recovered = ecrecover(timestamp || nonce || body, signature)
+   require recovered == addressFromPubKey(pubKey)                # key-control check
+   require partyKey(body.roles[0]) == senderPartyKey             # payload-identity check
+   require body.roles[0].role == role                            # payload-role check
+   -> otherwise 401/403, logged as a SECURITY rejection
 ```
+
+The last two checks matter as much as the signature. The signature proves *the
+sender controls LK/CPO's key*; it says nothing about **who the payload claims to
+be**. Without binding the two, an admitted party could sign correctly as itself
+while declaring a different party in `roles[]` — and it is the payload, not the
+party key, that names the counterparty on the settlement channel the receiver
+then opens. The check makes the ledger, not the sender's assertion, the source
+of truth for who is on the other end of the money.
 
 This replaces vanilla OCPI's weakest link — a pre-shared `TOKEN_A` that, if
 leaked, lets anyone impersonate a party — with a **cryptographic check against
