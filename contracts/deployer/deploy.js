@@ -237,7 +237,7 @@ async function main() {
 
   // ---- Emit deployment manifest for the gateways --------------------------
   const manifest = {
-    network: 'adera-ibft2-local',
+    network: 'adera-qbft-local',
     chainId: CFG.chainId,
     registryAddress: address,
     threshold: CFG.threshold,

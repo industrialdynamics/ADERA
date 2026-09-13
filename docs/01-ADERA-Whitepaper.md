@@ -194,7 +194,7 @@ terminology, that is:
   change requires a defined majority to agree.
 
 The software is **Hyperledger Besu**, a mature open-source enterprise ledger,
-configured in a mode called **IBFT 2.0**. Two properties of that mode matter to
+configured in a mode called **QBFT**. Two properties of that mode matter to
 a regulator:
 
 - **Immediate finality.** When a change is recorded, it is final at once. There
@@ -778,13 +778,13 @@ production-ready as shipped.
 | **CPO** | Charge Point Operator. Owns and runs physical charging stations. |
 | **eMSP** | e-Mobility Service Provider. Sells charging access to drivers, typically across many CPOs' networks. May own no chargers. |
 | **Gateway** | The software an operator runs to speak OCPI to its counterparties and to read the registry. |
-| **IBFT 2.0** | The consensus mode used here: a defined set of known organisations records changes, and changes are final immediately. |
 | **Multi-signature** | An action takes effect only when a defined number of independent parties have each approved it. |
 | **OCPI** | Open Charge Point Interface. The standard message format between two *companies* for roaming. |
 | **OCPP** | Open Charge Point Protocol. Between a charger and *its own* operator's back-end. Internal; not part of ADERA. |
 | **Party ID** | An operator's identifier: a country code plus a three-character code. Bound 1:1 to one legal entity. |
 | **Permissioned ledger** | A replicated, append-only, jointly governed database whose copy-holders are all vetted and known. No cryptocurrency involved. |
 | **Public / private key** | A paired set of numbers. The private key signs; the public key lets anyone verify that signature without being able to forge one. |
+| **QBFT** | The consensus mode used here: a defined set of known organisations records changes, and changes are final immediately. |
 | **Rail** | A banking payment mechanism — direct debit, interbank transfer, a bank's own API. |
 | **Roaming** | Letting a customer of one network use another network's infrastructure. |
 | **Smart contract** | A short published program every copy of the ledger runs identically, so no participant can apply different rules to itself. |

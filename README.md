@@ -1,8 +1,8 @@
 # ADERA — Local PoC Sandbox
 
 **Automated Decentralized Energy Roaming Architecture.** A sovereign,
-tokenless, hubless EV-roaming framework: a permissioned Hyperledger Besu (IBFT
-2.0) ledger acting as a zero-trust OCPI directory, with direct peer-to-peer OCPI
+tokenless, hubless EV-roaming framework: a permissioned Hyperledger Besu (QBFT)
+ledger acting as a zero-trust OCPI directory, with direct peer-to-peer OCPI
 between operators and pluggable local payment settlement.
 
 > **Docs:** [`docs/01-ADERA-Whitepaper.md`](docs/01-ADERA-Whitepaper.md) ·
@@ -50,7 +50,7 @@ new page in the PDF.
 
 ## What this sandbox demonstrates, end to end
 
-1. A **permissioned IBFT 2.0** network of two founding validators (CPO + eMSP)
+1. A **permissioned QBFT** network of two founding validators (CPO + eMSP)
    reaching consensus, with **node + account permissioning** gatekeeping.
 2. A **registry smart contract** deployed and seeded with two founding parties.
 3. A **multisig admission** of a third party (`LK/EVX`) — proposed by the CPO
@@ -83,7 +83,7 @@ ADERA/
 │   ├── 00-ADERA-Expanded-Technical-Guide.md   # start here; §7 = implemented vs. described
 │   ├── 01-ADERA-Whitepaper.md
 │   └── 02-System-Architecture-Security-Design.md
-├── network/                      # Besu IBFT 2.0 network material (pre-generated, valid)
+├── network/                      # Besu QBFT network material (pre-generated, valid)
 │   ├── genesis.json              # extraData encodes both validators (real keys)
 │   ├── permissions_config.toml   # node + account allowlists ("permissions.json")
 │   ├── static-nodes.json         # enodes @ static IPs
@@ -183,7 +183,7 @@ The sequence is built to make the dependencies visible:
 
 | Step | Container | What it proves |
 | ---- | --------- | -------------- |
-| 1 | `adera-validator-cpo` alone | RPC answers but **block height stays at 0** — one node cannot finalise, because IBFT 2.0 needs a quorum of the two-member validator set |
+| 1 | `adera-validator-cpo` alone | RPC answers but **block height stays at 0** — one node cannot finalise, because QBFT needs a quorum of the two-member validator set |
 | 2 | `adera-validator-emsp` | `net_peerCount` → `0x1` and the height starts climbing. Consensus, not just uptime |
 | 3 | `adera-contract-deployer` | Deploy → multisig admission → regulator probe → writes `/shared/deployment.json`, then **exits 0 and stays exited** (it is a job, not a service) |
 | 4 | `adera-gateway-emsp` | Boots, reads the manifest, serves OCPI, and *waits*. No traffic yet |
@@ -280,9 +280,9 @@ who called it, not itself.)
 curl -s -X POST http://localhost:8545 -H 'Content-Type: application/json' \
   --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 
-# The two IBFT validators
+# The two QBFT validators
 curl -s -X POST http://localhost:8545 -H 'Content-Type: application/json' \
-  --data '{"jsonrpc":"2.0","method":"ibft_getValidatorsByBlockNumber","params":["latest"],"id":1}'
+  --data '{"jsonrpc":"2.0","method":"qbft_getValidatorsByBlockNumber","params":["latest"],"id":1}'
 # expect: 0x27d5b5ce6678a713db4632551fb2b04d21c0ddb8 and 0xfe8d8e89f67fbca67d48d94dc92edfd508c679ac
 
 # Each validator has exactly one peer
@@ -354,7 +354,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST \
 
 - **A gateway logs `initiator attempt N/30 failed`** then succeeds — normal; the
   initiator retries until the peer gateway's HTTP server is up.
-- **`ibft_getValidatorsByBlockNumber` errors / block height stuck at 0** — the
+- **`qbft_getValidatorsByBlockNumber` errors / block height stuck at 0** — the
   two validators must both be up and peered (this 2-validator PoC has no fault
   tolerance by design). Check `docker compose logs adera-validator-emsp` and
   confirm `net_peerCount` is `0x1`.

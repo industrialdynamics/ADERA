@@ -96,7 +96,7 @@ else
   bad "height moved ($h1 -> $h3); expected it to be stuck with one validator."
 fi
 say ""
-say "THIS IS THE POINT OF STEP 1. IBFT 2.0 needs a supermajority of the"
+say "THIS IS THE POINT OF STEP 1. QBFT needs a supermajority of the"
 say "validator set to finalise a block. The set has two members (both are"
 say "written into genesis.json's extraData), so one node on its own can"
 say "propose but can never finalise. A permissioned chain does not 'just run'"
@@ -135,8 +135,8 @@ fi
 
 say ""
 say "And the chain will name its validator set:"
-run "curl ... ibft_getValidatorsByBlockNumber [\"latest\"]"
-rpc ibft_getValidatorsByBlockNumber '["latest"]' | grep -o '0x[0-9a-f]\{40\}' \
+run "curl ... qbft_getValidatorsByBlockNumber [\"latest\"]"
+rpc qbft_getValidatorsByBlockNumber '["latest"]' | grep -o '0x[0-9a-f]\{40\}' \
   | while read -r v; do printf '        %s\n' "$v"; done
 say ""
 say "Nothing has been deployed yet. There is a chain, and that is all."
@@ -253,7 +253,7 @@ cat <<'DIAGRAM'
              │       │                   │               │
         ┌────┴───────┴────┐         ┌────┴────┐     ┌────┴────┐
         │   validator-cpo │◄──P2P──►│         │     │         │
-        │   172.28.0.11   │  IBFT   │ gateway │     │ gateway │
+        │   172.28.0.11   │  QBFT   │ gateway │     │ gateway │
         │        ▲        │ 2 of 2  │  -cpo   │────►│  -emsp  │
         │        │        │         │ LK/CPO  │OCPI │ LK/EMS  │
         │   validator-emsp│         │         │HTTP │         │

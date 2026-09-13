@@ -47,10 +47,10 @@ else
   fail "chain height is 0 or unreachable — are both validators up?"
 fi
 
-validators=$(rpc ibft_getValidatorsByBlockNumber '["latest"]')
+validators=$(rpc qbft_getValidatorsByBlockNumber '["latest"]')
 count=$(printf '%s' "$validators" | grep -o '0x[0-9a-f]\{40\}' | wc -l | tr -d ' ')
 if [ "$count" -eq 2 ]; then
-  pass "IBFT 2.0 validator set has both founders"
+  pass "QBFT validator set has both founders"
   printf '%s' "$validators" | grep -o '0x[0-9a-f]\{40\}' | while read -r v; do info "$v"; done
 else
   fail "expected 2 validators, found $count"

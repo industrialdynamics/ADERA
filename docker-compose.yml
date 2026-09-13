@@ -2,8 +2,8 @@
 # ADERA — Automated Decentralized Energy Roaming Architecture
 # Local multi-node PoC sandbox.
 #
-#   adera-validator-cpo    Founding CPO validator  (Hyperledger Besu, IBFT 2.0)
-#   adera-validator-emsp   Founding eMSP validator (Hyperledger Besu, IBFT 2.0)
+#   adera-validator-cpo    Founding CPO validator  (Hyperledger Besu, QBFT)
+#   adera-validator-emsp   Founding eMSP validator (Hyperledger Besu, QBFT)
 #   adera-contract-deployer Compiles + deploys AderaRegistry, seeds parties
 #   adera-gateway-cpo      CPO operator gateway (initiates the OCPI handshake)
 #   adera-gateway-emsp     eMSP operator gateway (receiver)

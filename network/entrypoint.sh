@@ -2,7 +2,7 @@
 # =============================================================================
 # ADERA validator entrypoint
 # -----------------------------------------------------------------------------
-# Runs a Hyperledger Besu validator for the permissioned IBFT 2.0 ADERA
+# Runs a Hyperledger Besu validator for the permissioned QBFT ADERA
 # network. Each validator is configured entirely from read-only mounts under
 # /config; the only writable location is the data path on a named volume.
 #
@@ -36,7 +36,7 @@ cp "${STATIC_NODES_SRC}" "${DATA_PATH}/static-nodes.json"
 cp "${PERMISSIONS_SRC}" "${PERMISSIONS_RUNTIME}"
 
 echo "[adera-validator-${ADERA_ROLE}] advertising p2p host ${ADERA_P2P_HOST}"
-echo "[adera-validator-${ADERA_ROLE}] starting Besu (IBFT 2.0, permissioned)"
+echo "[adera-validator-${ADERA_ROLE}] starting Besu (QBFT, permissioned)"
 
 exec besu \
   --data-path="${DATA_PATH}" \
@@ -48,7 +48,7 @@ exec besu \
   --rpc-http-host=0.0.0.0 \
   --rpc-http-port=8545 \
   --rpc-http-cors-origins="all" \
-  --rpc-http-api=ETH,NET,WEB3,ADMIN,TXPOOL,IBFT,PERM \
+  --rpc-http-api=ETH,NET,WEB3,ADMIN,TXPOOL,QBFT,PERM \
   --rpc-ws-enabled=true \
   --rpc-ws-host=0.0.0.0 \
   --rpc-ws-port=8546 \

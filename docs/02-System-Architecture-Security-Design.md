@@ -10,7 +10,7 @@ This document is the threat model and the defense-in-depth specification.*
 ```
                  ┌───────────────────────── ADERA permissioned network ─────────────────────────┐
                  │                                                                                │
-                 │   ┌───────────────────────┐  IBFT 2.0 / RLPx  ┌───────────────────────┐        │
+                 │   ┌───────────────────────┐    QBFT / RLPx    ┌───────────────────────┐        │
  Regulator       │   │  adera-validator-cpo  │◄────────────────►│ adera-validator-emsp │        │
  observer    ───►│   │  Besu, validator,      │   (permissioned  │  Besu, validator,     │        │
  node (RO)       │   │  172.28.0.11           │    P2P allowlist) │  172.28.0.12          │        │
@@ -46,7 +46,7 @@ Two planes, strictly separated:
 | - | ------------------------ | ------------------------------------------------------------- | ---------------------------------------- |
 | 1 | TCP / devp2p             | Besu node permissioning (`permissions_config.toml`, bootnodes)| Unauthorised nodes joining the ledger    |
 | 2 | Transaction pool         | Besu account permissioning (allowlist)                        | Unknown keys writing to the ledger       |
-| 3 | Consensus                | IBFT 2.0 validator set                                         | Unauthorised block production            |
+| 3 | Consensus                | QBFT validator set                                             | Unauthorised block production            |
 | 4 | Contract authorisation   | `onlyMember` / `onlyAuditor` / entity binding                 | Ungoverned state changes, role misuse    |
 | 5 | Identity binding         | `entityToParty` 1:1 mapping in `AderaRegistry`               | Party-ID spoofing / hijacking            |
 | 6 | Application handshake     | Signature verified vs on-chain `pubKey`                       | Impersonation over OCPI                   |
@@ -252,7 +252,7 @@ integrity.
 
 ### 6.1 Local grid instability / node restart
 
-- **Immediate finality + persistent data path.** IBFT 2.0 has no reorgs, and
+- **Immediate finality + persistent data path.** QBFT has no reorgs, and
   each validator persists its chain to a Docker volume (`besu-*-data`). After a
   power loss a validator restarts, reloads `static-nodes.json`, re-peers, and
   resumes from its last final block. No state is rewritten or lost.
@@ -312,7 +312,7 @@ final financial outcome.
 | ---------------------------------------- | -------------------------------------------- | -------------------------------------- |
 | Rogue node joins ledger                  | Node permissioning at RLPx handshake         | `permissions_config.toml`, entrypoint  |
 | Unknown key writes to ledger             | Account permissioning                        | `permissions_config.toml`              |
-| Unauthorised block production            | IBFT 2.0 fixed validator set                 | `genesis.json` extraData               |
+| Unauthorised block production            | QBFT fixed validator set                     | `genesis.json` extraData               |
 | Duplicate / spoofed Party ID             | 1:1 Party↔entity binding, uniqueness         | `AderaRegistry._registerParty`        |
 | Hijack another party's endpoint/key      | `msg.sender == entity` on rotation           | `rotateEndpoint`, `rotatePubKey`       |
 | Sybil identities for governance capture  | Multisig admission by existing operators     | `propose`/`confirm`, `proposeAdmitParty`|
@@ -322,7 +322,7 @@ final financial outcome.
 | Stale routing to a revoked peer          | Live `active` check on every discovery       | `resolveEndpoint`, `runInitiator`      |
 | Regulator becomes a bottleneck / SPOF    | Read-only observer auditor role              | `auditor`, `auditProbe`                |
 | Regulator tampering with the market      | Auditor has no mutation power                | `onlyAuditor` (probe-only)             |
-| Grid loss / restart corrupts state       | Immediate finality + persistent data path    | IBFT 2.0, Docker volumes               |
+| Grid loss / restart corrupts state       | Immediate finality + persistent data path    | QBFT, Docker volumes                   |
 | Internet dropout loses CDRs              | Durable, ordered offline queue               | `offlineQueue.js`                      |
 | Slow bank stalls charging                | Decoupled fire-and-forget settlement webhook | `payments.js`                          |
 
@@ -332,7 +332,7 @@ final financial outcome.
 
 | Identity                | Key type          | Where it lives                        | Proves                              |
 | ----------------------- | ----------------- | ------------------------------------- | ----------------------------------- |
-| Validator (node) key    | secp256k1         | `network/keys/{cpo,emsp}/key`         | Right to peer + produce IBFT blocks |
+| Validator (node) key    | secp256k1         | `network/keys/{cpo,emsp}/key`         | Right to peer + produce QBFT blocks |
 | Legal-entity governance | secp256k1 (cold)  | operator HSM (test key in `.env`)     | Right to vote in governance         |
 | Messaging (hot) key     | secp256k1         | gateway env / KMS                     | Right to speak *as* a Party ID      |
 | Consortium data-plane   | AES-256 symmetric | admitted members only                 | Membership → can resolve endpoints  |

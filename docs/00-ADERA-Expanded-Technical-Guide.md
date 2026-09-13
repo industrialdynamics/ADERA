@@ -876,13 +876,13 @@ network, is what makes this **permissioned**: a private, invite-only version
 of the same technology, not connected to or dependent on the public
 cryptocurrency network at all.
 
-### 3.2 What "IBFT 2.0" and "proof-of-authority" mean, and why it matters to a regulator
+### 3.2 What "QBFT" and "proof-of-authority" mean, and why it matters to a regulator
 
 Public blockchains like Bitcoin use **proof-of-work**: anonymous participants
 ("miners") compete by burning huge amounts of electricity to earn the right
 to add the next block of transactions. ADERA does none of that.
 
-**IBFT 2.0 (Istanbul Byzantine Fault Tolerant 2.0)** is a **proof-of-authority**
+**QBFT (Quorum Byzantine Fault Tolerant)** is a **proof-of-authority**
 consensus algorithm: a fixed, known set of **validators** (here, the founding
 and later-admitted operators themselves) take turns proposing blocks, and a
 **quorum** (a large-enough majority of them) must sign off before a block is
@@ -890,7 +890,7 @@ accepted. Two properties fall out of this that matter a lot to a regulator:
 
 - **Immediate finality.** In proof-of-work systems, a block can technically
   get "reorganized" (undone and replaced) for a while after it's produced,
-  which is why exchanges make you wait for several confirmations. IBFT 2.0
+  which is why exchanges make you wait for several confirmations. QBFT
   blocks are final the instant they're produced — no reorganizations, ever.
   So the moment an admission or revocation is recorded, it's permanently
   settled.
@@ -999,8 +999,8 @@ makes them look like one:
 | | Validator set | Governance membership |
 | --- | --- | --- |
 | Decides | Who produces blocks | Who votes to admit and revoke parties |
-| Lives in | Besu / IBFT 2.0 | The `AderaRegistry` smart contract |
-| Changed by | An IBFT validator vote | A multisig proposal |
+| Lives in | Besu / QBFT | The `AderaRegistry` smart contract |
+| Changed by | A QBFT validator vote | A multisig proposal |
 | Needed to participate in roaming? | **No** | Yes |
 
 The reference deployment proves the distinction: **LK/EVX** is admitted by
@@ -1048,7 +1048,7 @@ Three properties make the pairing worth keeping together:
 - **Skin in the game.** The parties benefiting from the network are the ones
   keeping it alive.
 
-Sizing follows from IBFT 2.0's Byzantine fault tolerance, which needs
+Sizing follows from QBFT's Byzantine fault tolerance, which needs
 `3f + 1` validators to survive `f` failures:
 
 | Validators | Survives | Comment |
@@ -1056,13 +1056,13 @@ Sizing follows from IBFT 2.0's Byzantine fault tolerance, which needs
 | 2 | **0** | The sandbox. Both must be up. Demonstration sizing only |
 | 4 | 1 | The practical production minimum |
 | 7 | 2 | Comfortable for a national network |
-| ~20+ | — | IBFT messaging is O(n²); block times degrade well before this |
+| ~20+ | — | QBFT messaging is O(n²); block times degrade well before this |
 
 In a small national market with a handful of eMSPs, four to seven
 validators is both achievable and correctly sized. If the eMSP count is ever
 below four, the gap is best filled by neutral parties — the regulator, a bank, an
 industry association, a university. **Validators need not be operators at all**;
-IBFT only requires known, vetted nodes.
+QBFT only requires known, vetted nodes.
 
 #### Is the validator the same software as the gateway? No
 
@@ -1106,7 +1106,7 @@ The validator's ~720 MiB is an artifact, not a requirement. With no `-Xmx` set,
 the JVM sizes its maximum heap at 25% of visible RAM — on an 8 GiB host that is
 a 1.9 GiB ceiling, and a garbage collector under no memory pressure has no
 reason to hand anything back. Give the process a smaller box and it sizes itself
-down. The same IBFT validator, run under hard container memory limits:
+down. The same QBFT validator, run under hard container memory limits:
 
 | Container limit | Heap | Steady state | Producing blocks? |
 | --- | --- | --- | --- |
@@ -1201,7 +1201,7 @@ image; the validator is stock Besu plus config files.
 2. **Bootstrap details.** `static-nodes.json` hardcodes two fixed container IPs.
    A real network needs a published genesis file and a stable, DNS-based
    bootnode list.
-3. **Becoming a validator** additionally requires an IBFT validator vote by the
+3. **Becoming a validator** additionally requires a QBFT validator vote by the
    existing validators — separate from the registry multisig, and not currently
    wired to it.
 
@@ -1227,7 +1227,7 @@ message would actually hit them:
 flowchart TB
     L1["Layer 1 — TCP / devp2p node permissioning<br/>Blocks: unauthorised nodes even joining the ledger's network"]
     L2["Layer 2 — Transaction-pool account permissioning<br/>Blocks: unknown keys submitting writes to the ledger"]
-    L3["Layer 3 — IBFT 2.0 consensus, known validator set<br/>Blocks: unauthorised block production"]
+    L3["Layer 3 — QBFT consensus, known validator set<br/>Blocks: unauthorised block production"]
     L4["Layer 4 — Smart-contract role checks (onlyMember / onlyAuditor)<br/>Blocks: ungoverned state changes, role misuse"]
     L5["Layer 5 — Identity binding (1 entity : 1 Party ID)<br/>Blocks: Party-ID spoofing or hijacking"]
     L6["Layer 6 — Application-layer signature check vs on-chain public key<br/>Blocks: impersonation over an actual OCPI conversation"]
@@ -1406,7 +1406,7 @@ case.
 
 ### 5.1 A ledger node loses power and restarts
 
-Because IBFT 2.0 gives **immediate finality** (§3.2), there's no "in-progress,
+Because QBFT gives **immediate finality** (§3.2), there's no "in-progress,
 not-yet-final" state that could be corrupted by a crash. Each validator saves
 its copy of the ledger to persistent storage continuously, so after a restart
 it simply reloads, reconnects to its allowed peers, and picks up exactly
@@ -1841,7 +1841,6 @@ mistaken for oversights later. Each would need addressing before production:
 | EVM (Ethereum Virtual Machine) | The standardized runtime that executes smart contracts on Ethereum-family ledgers. |
 | Finality | The point at which a recorded transaction/block is permanent and can never be undone or reorganized. |
 | HSM (Hardware Security Module) | Tamper-resistant hardware built specifically to store cryptographic keys so they can never be extracted. |
-| IBFT 2.0 | The proof-of-authority consensus algorithm ADERA uses: a known validator set, immediate finality, no mining. |
 | Idempotency | A system design property where repeating the same operation twice has the same effect as doing it once — prevents double-charging on retries. |
 | Ledger | A shared, jointly-maintained, tamper-evident record book — here, used only for identity/discovery, never for OCPI traffic or money. |
 | Mandate (payment) | A permission slip signed once, in advance, allowing another party to collect money from your account — what a direct debit for a utility bill runs on. The **mandate reference** (`mandateRef`) is its ID: a pointer to an arrangement held at a bank, never the account details themselves. |
@@ -1856,6 +1855,7 @@ mistaken for oversights later. Each would need addressing before production:
 | Private key / public key | A mathematically linked pair: the private half proves identity by signing (never shared); the public half lets anyone verify that signature (shared freely). |
 | Proof-of-authority | A consensus model where a known, vetted set of validators (not anonymous miners) produce blocks. |
 | Push vs. pull payment | The two directions money can move. **Push**: the payer sends it (a bank transfer) — so the payer needs the payee's account details. **Pull**: the payee collects under a mandate (a direct debit) — so no account details need to cross between the two companies at all. |
+| QBFT (Quorum Byzantine Fault Tolerant) | The proof-of-authority consensus algorithm ADERA uses: a known validator set, immediate finality, no mining. |
 | Quorum | The minimum number/proportion of validators that must agree for consensus to proceed. |
 | Regulator (auditor role) | Whichever national authority licenses and oversees charging operators; holds a dedicated, read-only auditor key on the ledger. |
 | Roaming | Letting a customer of one operator use a different operator's infrastructure — borrowed from the mobile-network industry. |
